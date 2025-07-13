@@ -4,9 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from datetime import datetime
-import os
-import requests
 import yfinance as yf
+import requests
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Finance Wizard (Deployed)", layout="centered")
@@ -24,7 +23,32 @@ hotkey = st.selectbox("Prediction Strategy", [
 ])
 
 # --- Function: Get Stock Price using yfinance ---
-def get_stock_price(symbol): def analyze_and_predict(df, days_ahead, label):
+def get_stock_price(symbol):
+    stock = yf.Ticker(symbol)
+    df = stock.history(period="60d")
+    if df.empty:
+        return None
+    df = df.reset_index()
+    df = df[["Date", "Close"]]
+    df.rename(columns={"Date": "date", "Close": "price"}, inplace=True)
+    return df
+
+# --- Function: Get NAV from Groww API ---
+def get_nav_data(slug):
+    try:
+        url = f"https://groww.in/v1/api/mf/v1/scheme/{slug}"
+        res = requests.get(url)
+        data = res.json()
+        navs = data["navHistory"]
+        df = pd.DataFrame(navs)
+        df["date"] = pd.to_datetime(df["navDate"])
+        df["price"] = df["nav"]
+        return df[["date", "price"]].sort_values("date")
+    except:
+        return None
+
+# --- Analysis + Prediction Function ---
+def analyze_and_predict(df, days_ahead, label):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
     y = df["price"].values
@@ -40,7 +64,7 @@ def get_stock_price(symbol): def analyze_and_predict(df, days_ahead, label):
     upper = pred_price + 1.96 * std_dev
     lower = pred_price - 1.96 * std_dev
 
-    # Trend reversal (5-day MA slope)
+    # Trend reversal
     df["MA5"] = df["price"].rolling(window=5).mean()
     reversal = False
     if len(df["MA5"].dropna()) >= 3:
@@ -67,13 +91,7 @@ def get_stock_price(symbol): def analyze_and_predict(df, days_ahead, label):
     else:
         st.success("✅ Trend appears stable.")
 
-    stock = yf.Ticker(symbol)
-    df = stock.history(period="60d")
-    df = df.reset_index()
-    df = df[["Date", "Close"]]
-    df.rename(columns={"Close": "price", "Date": "date"}, inplace=True)
-    return df
-    return df[["date", "price"]].sort_values("date")
+# --- Main Logic ---
 if st.button("Run Prediction"):
     if not symbol_or_slug:
         st.error("Please enter a valid input.")
@@ -85,20 +103,10 @@ if st.button("Run Prediction"):
             df = get_nav_data(symbol_or_slug)
             label = f"{symbol_or_slug.replace('-', ' ').title()} NAV"
 
-        # ✅ Handle if df is empty or None
         if df is None or df.empty:
             st.error("❌ Failed to fetch data. Check the symbol or try again later.")
-            st.write("Raw output:", df)
-        else:
-            analyze_and_predict(df, days_ahead, label)
-
-
-        # New debug info
-        if df is None or df.empty:
-            st.error("❌ No data found. Check your input format.")
-            st.write("📦 Raw DataFrame: ", df)
+            st.write("📦 Raw Output:", df)
         else:
             st.success("✅ Data successfully fetched.")
             st.write("📊 Sample Data:", df.tail())
             analyze_and_predict(df, days_ahead, label)
-
