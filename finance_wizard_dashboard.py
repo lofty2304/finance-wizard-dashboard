@@ -13,7 +13,7 @@ import finnhub
 
 # --- Load API keys ---
 openai.api_key = os.getenv("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")
-finnhub_client = finnhub.Client(api_key=os.getenv("d1psdrpr01qku4u4dhngd1psdrpr01qku4u4dho0"))
+finnhub_client = finnhub.Client(api_key=st.secrets["d1psdrpr01qku4u4dhngd1psdrpr01qku4u4dho0"])
 
 # --- UI ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
