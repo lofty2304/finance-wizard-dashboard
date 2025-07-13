@@ -24,7 +24,49 @@ hotkey = st.selectbox("Prediction Strategy", [
 ])
 
 # --- Function: Get Stock Price using yfinance ---
-def get_stock_price(symbol):
+def get_stock_price(symbol): def analyze_and_predict(df, days_ahead, label):
+    df["day_index"] = (df["date"] - df["date"].min()).dt.days
+    X = df[["day_index"]].values
+    y = df["price"].values
+
+    model = LinearRegression().fit(X, y)
+    pred_index = df["day_index"].max() + days_ahead
+    pred_price = model.predict([[pred_index]])[0]
+
+    # Confidence interval
+    y_pred = model.predict(X)
+    residuals = y - y_pred
+    std_dev = np.std(residuals)
+    upper = pred_price + 1.96 * std_dev
+    lower = pred_price - 1.96 * std_dev
+
+    # Trend reversal (5-day MA slope)
+    df["MA5"] = df["price"].rolling(window=5).mean()
+    reversal = False
+    if len(df["MA5"].dropna()) >= 3:
+        slope1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
+        slope2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
+        if np.sign(slope1) != np.sign(slope2):
+            reversal = True
+
+    # Chart
+    st.subheader(f"📊 {label} — Price Forecast")
+    fig, ax = plt.subplots()
+    ax.plot(df["date"], df["price"], label="Price", marker="o")
+    ax.plot(df["date"], df["MA5"], label="MA-5", linestyle="--", color="orange")
+    ax.errorbar(df["date"].max() + pd.Timedelta(days=days_ahead),
+                pred_price, yerr=1.96 * std_dev, fmt='ro', label="Predicted ±95% CI")
+    ax.legend()
+    st.pyplot(fig)
+
+    # Output
+    st.success(f"🔮 Predicted in {days_ahead} days: ₹{round(pred_price,2)}")
+    st.info(f"📈 95% Confidence Interval: ₹{round(lower,2)} – ₹{round(upper,2)}")
+    if reversal:
+        st.error("⚠️ Potential Trend Reversal Detected!")
+    else:
+        st.success("✅ Trend appears stable.")
+
     stock = yf.Ticker(symbol)
     df = stock.history(period="60d")
     df = df.reset_index()
