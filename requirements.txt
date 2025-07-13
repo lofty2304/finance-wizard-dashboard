@@ -1,5 +1,6 @@
 streamlit
-moneycontrolPy
 pandas
 scikit-learn
 matplotlib
+dateparser
+git+https://github.com/AkiMosi/moneycontrolPy.git
