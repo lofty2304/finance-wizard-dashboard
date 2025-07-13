@@ -1,7 +1,7 @@
 streamlit
 pandas
-scikit-learn
+numpy
 matplotlib
-dateparser
-beautifulsoup4
+scikit-learn
 yfinance
+requests
