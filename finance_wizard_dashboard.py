@@ -28,6 +28,9 @@ def get_stock_price(symbol):
     stock = yf.Ticker(symbol)
     df = stock.history(period="60d")
     df = df.reset_index()
+    df = df[["Date", "Close"]]
+    df.rename(columns={"Close": "price", "Date": "date"}, inplace=True)
+    return df
     return df[["date", "price"]].sort_values("date")
 if st.button("Run Prediction"):
     if not symbol_or_slug:
