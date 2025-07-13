@@ -9,7 +9,7 @@ import yfinance as yf
 import requests
 import openai
 import finnhub
-import ta  # ✅ New
+import ta
 
 # --- API Keys ---
 openai.api_key = st.secrets["OPENAI_API_KEY"]
@@ -17,201 +17,149 @@ finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
 
 # --- UI ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
-st.title("🧙 Finance Wizard: Full Market Intelligence")
+st.title("🧙 Finance Wizard: Stock Forecasting Dashboard")
 
-asset_type = st.selectbox("Choose Asset Type", ["Stock", "Mutual Fund"])
-symbol_or_slug = st.text_input("Enter Ticker (e.g. INFY.NS) or Fund Slug")
-days_ahead = st.slider("Days ahead to predict", 1, 30, 7)
-
-hotkey = st.selectbox("Strategy", [
-    "🔮 W - Linear Regression",
-    "🧠 ML - Polynomial ML",
-    "🌐 TA - Trend (MA)",
-    "🔀 TE - Reversal Only",
-    "🟢 SA - Optimistic Scenario",
-    "🟡 SC - Conservative Scenario",
-    "🔴 SD - Pessimistic Scenario",
-    "⚖️ SE - Extreme Shock",
-    "📉 TI - Technical Indicator Forecast",
-    "↔️ TC - Compare Indicators",
-    "💡 TD - Explain Indicators",
-    "⚠️ TE - Indicator Risk Assessment"
+strategy = st.selectbox("📌 Select Strategy", [
+    "🔮 W - Predict One Stock",
+    "🏦 A - Compare Stocks",
+    "🕵️ S - Stock Deep Dive",
+    "📉 D - Downside Risk",
+    "📉 TI - Technical Indicator Forecast"
 ])
 
-# --- Data Fetch ---
+symbol_input = st.text_input("Enter Ticker(s)", "INFY.NS")
+days_ahead = st.slider("Days Ahead", 1, 30, 7)
+
+# --- Helpers ---
 def get_stock_price(symbol):
     try:
         df = yf.Ticker(symbol).history(period="90d")
         df = df.reset_index()[["Date", "Close"]]
         df.columns = ["date", "price"]
         return df
-    except: return None
+    except:
+        return None
 
-def get_nav_data(slug):
-    try:
-        url = f"https://groww.in/v1/api/mf/v1/scheme/{slug}"
-        res = requests.get(url)
-        df = pd.DataFrame(res.json()["navHistory"])
-        df["date"] = pd.to_datetime(df["navDate"])
-        df["price"] = df["nav"]
-        return df[["date", "price"]]
-    except: return None
-
-# --- Sentiment ---
-def get_news_sentiment(symbol):
-    try:
-        news = finnhub_client.company_news(symbol, _from="2024-01-01", to=datetime.now().strftime("%Y-%m-%d"))
-        records = []
-        for n in news[:10]:
-            score = get_sentiment_score(n["headline"] + " " + n.get("summary", ""))
-            records.append({"datetime": datetime.fromtimestamp(n["datetime"]), "score": score})
-        return pd.DataFrame(records)
-    except: return pd.DataFrame()
-
-def get_sentiment_score(text):
-    try:
-        res = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Score financial sentiment from -1 to 1."},
-                {"role": "user", "content": text}
-            ])
-        return float(res["choices"][0]["message"]["content"].strip())
-    except: return 0
-
-# --- Main Analysis Logic ---
-def analyze_and_predict(df, days_ahead, label, strategy):
+def predict_price(df, days_ahead):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
     y = df["price"].values
+    model = LinearRegression().fit(X, y)
+    future_index = df["day_index"].max() + days_ahead
+    pred_price = model.predict([[future_index]])[0]
+    std_dev = np.std(y - model.predict(X))
+    return pred_price, pred_price - 1.96 * std_dev, pred_price + 1.96 * std_dev
 
-    pred_price, lower, upper, std_dev = None, None, None, None
-    reversal = False
-
-    # Always calculate MA5
+def plot_chart(df, label, pred_price=None, lower=None, upper=None):
     df["MA5"] = df["price"].rolling(5).mean()
-
-    try:
-        if strategy == "W":
-            model = LinearRegression().fit(X, y)
-            future_index = df["day_index"].max() + days_ahead
-            pred_price = model.predict([[future_index]])[0]
-            std_dev = np.std(y - model.predict(X))
-
-        elif strategy == "ML":
-            X_scaled = X / X.max()
-            poly = PolynomialFeatures(3)
-            X_poly = poly.fit_transform(X_scaled)
-            model = LinearRegression().fit(X_poly, y)
-            pred_price = model.predict(poly.transform([[(df["day_index"].max() + days_ahead) / X.max()]]))[0]
-            std_dev = np.std(y - model.predict(X_poly))
-
-        elif strategy == "TA":
-            pred_price = df["price"].rolling(5).mean().iloc[-1]
-            std_dev = np.std(df["price"].diff().dropna())
-
-        elif strategy == "TE":
-            if len(df["MA5"].dropna()) >= 3:
-                s1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
-                s2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
-                if np.sign(s1) != np.sign(s2): reversal = True
-
-        elif strategy in ["SA", "SC", "SD", "SE"]:
-            model = LinearRegression().fit(X, y)
-            base_pred = model.predict([[df["day_index"].max() + days_ahead]])[0]
-            if strategy == "SA":
-                pred_price = base_pred * 1.10
-                lower, upper = pred_price * 0.98, pred_price * 1.20
-            elif strategy == "SC":
-                pred_price = base_pred * 1.02
-                lower, upper = pred_price * 0.98, pred_price * 1.05
-            elif strategy == "SD":
-                pred_price = base_pred * 0.95
-                lower, upper = pred_price * 0.90, pred_price * 1.00
-            elif strategy == "SE":
-                pred_price = base_pred * 0.80
-                lower, upper = pred_price * 0.75, pred_price * 0.85
-
-        elif strategy == "TI":
-            df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-            macd = ta.trend.MACD(df["price"])
-            df["MACD"] = macd.macd()
-            df["Signal"] = macd.macd_signal()
-            bb = ta.volatility.BollingerBands(df["price"])
-            df["BB_H"] = bb.bollinger_hband()
-            df["BB_L"] = bb.bollinger_lband()
-
-            signal = "🔁 Neutral"
-            if df["RSI"].iloc[-1] < 30 and df["MACD"].iloc[-1] > df["Signal"].iloc[-1]:
-                signal = "📈 Buy Signal"
-            elif df["RSI"].iloc[-1] > 70 and df["MACD"].iloc[-1] < df["Signal"].iloc[-1]:
-                signal = "📉 Sell Signal"
-            st.info(f"TI Signal: {signal}")
-            st.write(df[["date", "price", "RSI", "MACD", "Signal", "BB_H", "BB_L"]].tail())
-
-        elif strategy == "TC":
-            df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-            df["EMA20"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
-            df["BB_H"] = ta.volatility.BollingerBands(df["price"]).bollinger_hband()
-            df["BB_L"] = ta.volatility.BollingerBands(df["price"]).bollinger_lband()
-            st.write(df[["date", "RSI", "EMA20", "BB_H", "BB_L"]].tail())
-
-        elif strategy == "TD":
-            st.markdown("""
-            ### 💡 Indicator Explanations:
-            - **RSI**: Measures overbought (>70) or oversold (<30).
-            - **MACD**: Detects momentum shifts via EMA crossovers.
-            - **Bollinger Bands**: Show volatility compression and breakouts.
-            - **EMA**: Reacts faster to recent price than SMA.
-            """)
-
-        elif strategy == "TE":
-            st.warning("""
-            ⚠️ Limitations:
-            - Technicals often lag price action.
-            - News shocks override indicators.
-            - Works best with confirmation and volume.
-            """)
-
-        # Confidence Interval
-        if pred_price and not lower:
-            lower = pred_price - 1.96 * std_dev
-            upper = pred_price + 1.96 * std_dev
-
-    except Exception as e:
-        st.error(f"Strategy Error: {e}")
-        return
-
-    # --- Chart ---
-    st.subheader("📉 Price Chart + MA5")
     fig, ax = plt.subplots()
     ax.plot(df["date"], df["price"], label="Price")
     ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--")
-    if strategy not in ["TE", "TI", "TC", "TD"] and pred_price:
+    if pred_price:
         ax.errorbar(df["date"].max() + pd.Timedelta(days=days_ahead),
-                    pred_price, yerr=1.96 * std_dev, fmt='ro', label="Prediction")
+                    pred_price, yerr=[[pred_price - lower], [upper - pred_price]],
+                    fmt='ro', label="Prediction")
     ax.legend()
     st.pyplot(fig)
 
-    # --- Output ---
-    if strategy not in ["TE", "TI", "TC", "TD"] and pred_price:
-        st.success(f"Prediction in {days_ahead} days: ₹{round(pred_price, 2)}")
-        st.info(f"CI: ₹{round(lower, 2)} – ₹{round(upper, 2)}")
-
-    if strategy == "TE" and reversal:
-        st.error("⚠️ Trend reversal detected!")
-
-# --- Run ---
-if st.button("Run Prediction"):
-    if not symbol_or_slug:
-        st.error("Please enter a valid input.")
+def get_sentiment(symbol):
+    try:
+        news = finnhub_client.company_news(symbol, _from="2024-01-01", to=datetime.now().strftime("%Y-%m-%d"))
+        scores = []
+        for n in news[:5]:
+            res = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Score from -1 (bad) to 1 (good)"},
+                    {"role": "user", "content": n["headline"]}
+                ])
+            scores.append(float(res["choices"][0]["message"]["content"].strip()))
+        return np.mean(scores)
+    except:
+        return 0
+# --- Strategy Logic ---
+if st.button("Run Analysis"):
+    if not symbol_input:
+        st.error("❌ Please enter at least one ticker.")
     else:
-        df = get_stock_price(symbol_or_slug) if asset_type == "Stock" else get_nav_data(symbol_or_slug)
-        label = f"{symbol_or_slug.upper()} Stock" if asset_type == "Stock" else f"{symbol_or_slug.title()} NAV"
-        strategy_code = hotkey.split("-")[0].strip().split()[-1]
+        symbols = [s.strip().upper() for s in symbol_input.split(",")]
 
-        if df is None or df.empty:
-            st.error("❌ Data not found.")
-        else:
-            st.write(df.tail())
-            analyze_and_predict(df, days_ahead, label, strategy_code)
+        if strategy.startswith("🔮 W"):
+            symbol = symbols[0]
+            df = get_stock_price(symbol)
+            if df is not None:
+                pred, low, high = predict_price(df, days_ahead)
+                st.success(f"🔮 {symbol} predicted price in {days_ahead} days: ₹{round(pred,2)}")
+                st.info(f"📈 Confidence Interval: ₹{round(low,2)} – ₹{round(high,2)}")
+                plot_chart(df, symbol, pred, low, high)
+            else:
+                st.error(f"Data not found for {symbol}")
+
+        elif strategy.startswith("🏦 A"):
+            results = []
+            for symbol in symbols:
+                df = get_stock_price(symbol)
+                if df is not None:
+                    pred, _, _ = predict_price(df, days_ahead)
+                    results.append((symbol, round(pred, 2)))
+            if results:
+                st.subheader("🏦 Comparison of Predicted Prices")
+                comp_df = pd.DataFrame(results, columns=["Symbol", f"Predicted Price in {days_ahead} days"])
+                st.dataframe(comp_df)
+                st.bar_chart(comp_df.set_index("Symbol"))
+            else:
+                st.error("No valid data for any symbol.")
+
+        elif strategy.startswith("🕵️ S"):
+            symbol = symbols[0]
+            df = get_stock_price(symbol)
+            if df is not None:
+                st.write("📉 Basic Forecast:")
+                pred, low, high = predict_price(df, days_ahead)
+                st.success(f"Prediction: ₹{round(pred, 2)} | CI: ₹{round(low)} – ₹{round(high)}")
+
+                st.write("📊 Technical Indicators:")
+                df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
+                macd = ta.trend.MACD(df["price"])
+                df["MACD"] = macd.macd()
+                df["Signal"] = macd.macd_signal()
+                bb = ta.volatility.BollingerBands(df["price"])
+                df["BB_H"] = bb.bollinger_hband()
+                df["BB_L"] = bb.bollinger_lband()
+                st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "BB_H", "BB_L"]].tail())
+
+                sentiment_score = get_sentiment(symbol)
+                st.info(f"🧠 News Sentiment Score: {round(sentiment_score, 2)}")
+                plot_chart(df, symbol, pred, low, high)
+            else:
+                st.error("❌ Data not found.")
+
+        elif strategy.startswith("📉 D"):
+            symbol = symbols[0]
+            df = get_stock_price(symbol)
+            if df is not None:
+                df["returns"] = df["price"].pct_change()
+                volatility = np.std(df["returns"].dropna())
+                pred, _, _ = predict_price(df, days_ahead)
+                downside = pred - (1.96 * volatility * df["price"].iloc[-1])
+                st.warning(f"📉 Estimated downside risk: ₹{round(downside, 2)}")
+                st.info(f"🔄 Historical volatility: {round(volatility*100, 2)}%")
+                plot_chart(df, symbol, pred, downside, pred)
+            else:
+                st.error("❌ Ticker not found.")
+
+        elif strategy.startswith("📉 TI"):
+            symbol = symbols[0]
+            df = get_stock_price(symbol)
+            if df is not None:
+                df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
+                macd = ta.trend.MACD(df["price"])
+                df["MACD"] = macd.macd()
+                df["Signal"] = macd.macd_signal()
+                bb = ta.volatility.BollingerBands(df["price"])
+                df["BB_H"] = bb.bollinger_hband()
+                df["BB_L"] = bb.bollinger_lband()
+                st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "BB_H", "BB_L"]].tail())
+                plot_chart(df, symbol)
+            else:
+                st.error("❌ Data not found.")
