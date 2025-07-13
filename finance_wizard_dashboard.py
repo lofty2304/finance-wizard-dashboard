@@ -165,7 +165,7 @@ if st.button("Run Prediction"):
             st.error("❌ Data not available or ticker/slug is invalid.")
         else:
             st.write("✅ Data Preview", df.tail())
-            strategy_code = hotkey.split()[0].strip("🔮🧠🌐🔀")
+            strategy_code = hotkey.split("-")[0].strip().split()[-1]
             analyze_and_predict(df, days_ahead, label, strategy_code)
 
             if asset_type == "Stock":
