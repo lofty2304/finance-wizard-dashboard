@@ -28,4 +28,5 @@ def get_stock_price(symbol):
     stock = yf.Ticker(symbol)
     df = stock.history(period="60d")
     df = df.reset_index()
-    df = df[["]()]()
+    return df[["date", "price"]].sort_values("date")
+
