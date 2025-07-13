@@ -1,0 +1,5 @@
+streamlit
+moneycontrolPy
+pandas
+scikit-learn
+matplotlib
