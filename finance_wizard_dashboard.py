@@ -31,7 +31,7 @@ hotkey = st.selectbox("Strategy", [
 # --- Data loaders ---
 def get_stock_price(symbol):
     try:
-        df = yf.Ticker(symbol).history(period="60d")
+        df = yf.Ticker(symbol).history(period="90d")
         if df.empty: return None
         df = df.reset_index()[["Date", "Close"]]
         df.columns = ["date", "price"]
@@ -83,11 +83,10 @@ def analyze_and_predict(df, days_ahead, label, strategy):
 
     pred_price, lower, upper, std_dev = None, None, None, None
     reversal = False
-    st.write(f"🧪 Selected Strategy: {strategy}")
+    st.write(f"🧪 Strategy Used: {strategy}")
 
     try:
         if strategy == "W":
-            st.write("📈 Using Linear Regression")
             model = LinearRegression().fit(X, y)
             future_index = df["day_index"].max() + days_ahead
             pred_price = model.predict([[future_index]])[0]
@@ -95,29 +94,28 @@ def analyze_and_predict(df, days_ahead, label, strategy):
             std_dev = np.std(residuals)
 
         elif strategy == "ML":
-            st.write("🤖 Using Polynomial Regression")
+            # Normalized index improves polynomial prediction for longer terms
+            X_scaled = X / X.max()
             poly = PolynomialFeatures(degree=3)
-            X_poly = poly.fit_transform(X)
+            X_poly = poly.fit_transform(X_scaled)
             model = LinearRegression().fit(X_poly, y)
-            future_index = df["day_index"].max() + days_ahead
+            future_index = (df["day_index"].max() + days_ahead) / X.max()
             pred_price = model.predict(poly.transform([[future_index]]))[0]
             residuals = y - model.predict(X_poly)
             std_dev = np.std(residuals)
 
         elif strategy == "TA":
-            st.write("📊 Using Moving Average (5-day)")
             pred_price = df["price"].rolling(window=5).mean().iloc[-1]
             std_dev = np.std(df["price"].diff().dropna())
 
         elif strategy == "TE":
-            st.write("🔁 Detecting Trend Reversals Only")
-            pred_price = None  # TE should not generate prediction
-            df["MA5"] = df["price"].rolling(5).mean()
+            df["MA5"] = df["price"].rolling(window=5).mean()
             if len(df["MA5"].dropna()) >= 3:
                 slope1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
                 slope2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
                 if np.sign(slope1) != np.sign(slope2):
                     reversal = True
+            pred_price, lower, upper = None, None, None
 
         if pred_price is not None and std_dev is not None:
             lower = pred_price - 1.96 * std_dev
@@ -127,31 +125,30 @@ def analyze_and_predict(df, days_ahead, label, strategy):
         st.error(f"❌ Prediction failed: {e}")
         return
 
-    # MA5 trend detection
+    # Always compute MA5 for chart
     df["MA5"] = df["price"].rolling(5).mean()
-    if strategy != "TE" and len(df["MA5"].dropna()) >= 3:
-        slope1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
-        slope2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
-        if np.sign(slope1) != np.sign(slope2):
-            reversal = True
 
-    # Chart
-    st.subheader("📉 Forecast Chart")
+    # --- Chart display ---
+    st.subheader("📉 Price Chart + MA5")
     fig, ax = plt.subplots()
     ax.plot(df["date"], df["price"], label="Price")
     ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--")
-    if pred_price:
+    if strategy != "TE" and pred_price:
         ax.errorbar(df["date"].max() + pd.Timedelta(days=days_ahead),
-                    pred_price, yerr=1.96*std_dev, fmt='ro', label="Prediction")
+                    pred_price, yerr=1.96 * std_dev, fmt='ro', label="Prediction")
     ax.legend()
     st.pyplot(fig)
 
-    # Result Output
-    if pred_price:
+    # --- Output ---
+    if strategy != "TE" and pred_price:
         st.success(f"🔮 Prediction ({days_ahead} days): ₹{round(pred_price, 2)}")
         st.info(f"📈 95% CI: ₹{round(lower, 2)} – ₹{round(upper, 2)}")
-    if reversal:
-        st.warning("⚠️ Possible trend reversal detected!")
+
+    if strategy == "TE":
+        if reversal:
+            st.error("⚠️ Trend reversal detected!")
+        else:
+            st.success("✅ No trend reversal detected.")
 
 # --- Main run ---
 if st.button("Run Prediction"):
