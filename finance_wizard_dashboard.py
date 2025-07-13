@@ -16,16 +16,21 @@ finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
 
 # --- UI ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
-st.title("🧙 Finance Wizard: Stock & Mutual Fund Intelligence")
+st.title("🧙 Finance Wizard: Forecasting + Scenario Analysis")
 
 asset_type = st.selectbox("Choose Asset Type", ["Stock", "Mutual Fund"])
 symbol_or_slug = st.text_input("Enter Symbol (e.g. INFY.NS) or Slug (e.g. axis-small-cap-direct-growth)")
 days_ahead = st.slider("Days ahead to predict", 1, 30, 7)
+
 hotkey = st.selectbox("Strategy", [
     "🔮 W - Linear Regression",
     "🧠 ML - Polynomial ML",
     "🌐 TA - Trend (MA)",
-    "🔀 TE - Reversal Only"
+    "🔀 TE - Reversal Only",
+    "🟢 SA - Optimistic Scenario",
+    "🟡 SC - Conservative Scenario",
+    "🔴 SD - Pessimistic Scenario",
+    "⚖️ SE - Extreme Shock"
 ])
 
 # --- Data loaders ---
@@ -94,7 +99,6 @@ def analyze_and_predict(df, days_ahead, label, strategy):
             std_dev = np.std(residuals)
 
         elif strategy == "ML":
-            # Normalized index improves polynomial prediction for longer terms
             X_scaled = X / X.max()
             poly = PolynomialFeatures(degree=3)
             X_poly = poly.fit_transform(X_scaled)
@@ -117,7 +121,32 @@ def analyze_and_predict(df, days_ahead, label, strategy):
                     reversal = True
             pred_price, lower, upper = None, None, None
 
-        if pred_price is not None and std_dev is not None:
+        # Scenario strategy inherits W prediction
+        elif strategy in ["SA", "SC", "SD", "SE"]:
+            model = LinearRegression().fit(X, y)
+            future_index = df["day_index"].max() + days_ahead
+            base_pred = model.predict([[future_index]])[0]
+            std_dev = np.std(y - model.predict(X))
+
+            # Apply scenario multipliers
+            if strategy == "SA":
+                pred_price = base_pred * 1.10
+                lower = pred_price * 0.98
+                upper = pred_price * 1.20
+            elif strategy == "SC":
+                pred_price = base_pred * 1.02
+                lower = pred_price * 0.98
+                upper = pred_price * 1.05
+            elif strategy == "SD":
+                pred_price = base_pred * 0.95
+                lower = pred_price * 0.90
+                upper = pred_price * 1.00
+            elif strategy == "SE":
+                pred_price = base_pred * 0.80
+                lower = pred_price * 0.75
+                upper = pred_price * 0.85
+
+        if pred_price is not None and std_dev is not None and not lower:
             lower = pred_price - 1.96 * std_dev
             upper = pred_price + 1.96 * std_dev
 
@@ -125,11 +154,11 @@ def analyze_and_predict(df, days_ahead, label, strategy):
         st.error(f"❌ Prediction failed: {e}")
         return
 
-    # Always compute MA5 for chart
+    # Always compute MA5
     df["MA5"] = df["price"].rolling(5).mean()
 
-    # --- Chart display ---
-    st.subheader("📉 Price Chart + MA5")
+    # --- Chart ---
+    st.subheader(f"📉 {strategy} Forecast Chart")
     fig, ax = plt.subplots()
     ax.plot(df["date"], df["price"], label="Price")
     ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--")
