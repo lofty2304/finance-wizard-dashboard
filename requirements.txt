@@ -3,4 +3,5 @@ pandas
 scikit-learn
 matplotlib
 dateparser
+beautifulsoup4
 git+https://github.com/AkiMosi/moneycontrolPy.git
