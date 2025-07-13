@@ -11,18 +11,17 @@ import openai
 import os
 import finnhub
 
-# --- Load Secrets from Environment ---
+# --- Load API keys ---
 openai.api_key = os.getenv("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")
 finnhub_client = finnhub.Client(api_key=os.getenv("d1psdrpr01qku4u4dhngd1psdrpr01qku4u4dho0"))
 
-# --- Streamlit UI Setup ---
-st.set_page_config(page_title="Finance Wizard (Deployed)", layout="centered")
+# --- UI ---
+st.set_page_config(page_title="Finance Wizard", layout="centered")
 st.title("🧙 Finance Wizard: Forecast + Sentiment AI")
 
 asset_type = st.selectbox("Choose Asset Type", ["Stock", "Mutual Fund"])
-symbol_or_slug = st.text_input("Enter Ticker Symbol (e.g. INFY.NS) or Groww Slug (e.g. axis-small-cap-direct-growth)")
+symbol_or_slug = st.text_input("Enter Ticker (e.g. INFY.NS) or Groww Slug")
 days_ahead = st.slider("Days ahead to predict", 1, 30, 7)
-
 hotkey = st.selectbox("Prediction Strategy", [
     "🔮 W - Technical Price Prediction",
     "🧠 ML - Machine Learning-Based Forecast",
@@ -30,15 +29,20 @@ hotkey = st.selectbox("Prediction Strategy", [
     "🔀 TE - Trend Reversal Detection"
 ])
 
-# --- Data Loaders ---
+# --- Data fetchers ---
 def get_stock_price(symbol):
-    stock = yf.Ticker(symbol)
-    df = stock.history(period="60d")
-    if df.empty: return None
-    df = df.reset_index()
-    df = df[["Date", "Close"]]
-    df.rename(columns={"Date": "date", "Close": "price"}, inplace=True)
-    return df
+    try:
+        stock = yf.Ticker(symbol)
+        df = stock.history(period="60d")
+        if df.empty:
+            return None
+        df = df.reset_index()
+        df = df[["Date", "Close"]]
+        df.rename(columns={"Date": "date", "Close": "price"}, inplace=True)
+        return df
+    except Exception as e:
+        st.error(f"❌ Stock data fetch failed: {e}")
+        return None
 
 def get_nav_data(slug):
     try:
@@ -50,41 +54,43 @@ def get_nav_data(slug):
         df["date"] = pd.to_datetime(df["navDate"])
         df["price"] = df["nav"]
         return df[["date", "price"]].sort_values("date")
-    except:
+    except Exception as e:
+        st.error(f"❌ NAV data fetch failed: {e}")
         return None
 
-# --- Sentiment Analysis Functions ---
+# --- Sentiment
 def get_sentiment_score(text):
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a financial sentiment analyzer. Rate sentiment from -1 (very negative) to 1 (very positive). Respond with only a number."},
+                {"role": "system", "content": "You're a financial sentiment scorer. Return a score from -1 to 1."},
                 {"role": "user", "content": text}
             ]
         )
-        return float(response['choices'][0]['message']['content'].strip())
-    except:
+        score = float(response['choices'][0]['message']['content'].strip())
+        return score
+    except Exception as e:
+        st.warning(f"⚠️ OpenAI failed: {e}")
         return 0
 
 def get_news_sentiment(symbol):
     try:
         news = finnhub_client.company_news(symbol, _from="2024-01-01", to=datetime.now().strftime("%Y-%m-%d"))
         news = news[:10]
-        scores = []
-        timestamps = []
-        for article in news:
-            text = f"{article['headline']}\n{article.get('summary', '')}"
-            score = get_sentiment_score(text)
+        scores, times = [], []
+        for item in news:
+            txt = f"{item['headline']}\n{item.get('summary', '')}"
+            score = get_sentiment_score(txt)
             scores.append(score)
-            timestamps.append(datetime.fromtimestamp(article['datetime']))
-        df = pd.DataFrame({"datetime": timestamps, "score": scores})
-        return df
-    except:
+            times.append(datetime.fromtimestamp(item['datetime']))
+        return pd.DataFrame({"datetime": times, "score": scores})
+    except Exception as e:
+        st.warning(f"⚠️ Finnhub failed: {e}")
         return pd.DataFrame()
 
-# --- Prediction Logic ---
-def analyze_and_predict(df, days_ahead, label, hotkey_code):
+# --- Forecast logic
+def analyze_and_predict(df, days_ahead, label, strategy):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
     y = df["price"].values
@@ -92,62 +98,72 @@ def analyze_and_predict(df, days_ahead, label, hotkey_code):
     pred_price, lower, upper = None, None, None
     reversal = False
 
-    if hotkey_code == "W":
-        model = LinearRegression().fit(X, y)
-        future_index = df["day_index"].max() + days_ahead
-        pred_price = model.predict([[future_index]])[0]
-        residuals = y - model.predict(X)
+    st.write(f"🧪 Running Strategy: `{strategy}` on {label}")
+    st.write("📏 Data points:", len(df))
 
-    elif hotkey_code == "ML":
-        poly = PolynomialFeatures(degree=3)
-        X_poly = poly.fit_transform(X)
-        model = LinearRegression().fit(X_poly, y)
-        future_index = df["day_index"].max() + days_ahead
-        pred_price = model.predict(poly.transform([[future_index]]))[0]
-        residuals = y - model.predict(X_poly)
+    try:
+        if strategy == "W":
+            model = LinearRegression().fit(X, y)
+            future_index = df["day_index"].max() + days_ahead
+            pred_price = model.predict([[future_index]])[0]
+            std_dev = np.std(y - model.predict(X))
 
-    elif hotkey_code == "TA":
-        pred_price = df["price"].rolling(window=5).mean().iloc[-1]
-        residuals = df["price"].diff().dropna()
+        elif strategy == "ML":
+            poly = PolynomialFeatures(degree=3)
+            X_poly = poly.fit_transform(X)
+            model = LinearRegression().fit(X_poly, y)
+            future_index = df["day_index"].max() + days_ahead
+            pred_price = model.predict(poly.transform([[future_index]]))[0]
+            std_dev = np.std(y - model.predict(X_poly))
 
-    elif hotkey_code == "TE":
-        df["MA5"] = df["price"].rolling(window=5).mean()
-        if len(df["MA5"].dropna()) >= 3:
-            slope1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
-            slope2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
-            if np.sign(slope1) != np.sign(slope2):
-                reversal = True
+        elif strategy == "TA":
+            pred_price = df["price"].rolling(window=5).mean().iloc[-1]
+            std_dev = np.std(df["price"].diff().dropna())
 
-    if pred_price is not None:
-        std_dev = np.std(residuals)
-        upper = pred_price + 1.96 * std_dev
-        lower = pred_price - 1.96 * std_dev
+        elif strategy == "TE":
+            df["MA5"] = df["price"].rolling(5).mean()
+            if len(df["MA5"].dropna()) >= 3:
+                slope1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
+                slope2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
+                if np.sign(slope1) != np.sign(slope2):
+                    reversal = True
+            pred_price = None
 
-    df["MA5"] = df["price"].rolling(window=5).mean()
+        if pred_price is not None:
+            lower = pred_price - 1.96 * std_dev
+            upper = pred_price + 1.96 * std_dev
+
+    except Exception as e:
+        st.error(f"❌ Model failed: {e}")
+        return
+
+    # Add MA5 and reversal signal
+    df["MA5"] = df["price"].rolling(5).mean()
     if not reversal and len(df["MA5"].dropna()) >= 3:
         slope1 = df["MA5"].iloc[-1] - df["MA5"].iloc[-2]
         slope2 = df["MA5"].iloc[-2] - df["MA5"].iloc[-3]
         if np.sign(slope1) != np.sign(slope2):
             reversal = True
 
-    st.subheader(f"📊 {label} — {hotkey_code} Strategy")
+    # Plot
+    st.subheader("📊 Forecast Chart")
     fig, ax = plt.subplots()
-    ax.plot(df["date"], df["price"], label="Price", marker="o")
-    ax.plot(df["date"], df["MA5"], label="MA-5", linestyle="--")
+    ax.plot(df["date"], df["price"], label="Price")
+    ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--")
     if pred_price:
         ax.errorbar(df["date"].max() + pd.Timedelta(days=days_ahead),
-                    pred_price, yerr=1.96 * std_dev, fmt='ro', label="Prediction ±95%")
+                    pred_price, yerr=1.96*std_dev, fmt='ro', label="Prediction")
     ax.legend()
     st.pyplot(fig)
 
     if pred_price:
-        st.success(f"🔮 Prediction ({days_ahead} days): ₹{round(pred_price,2)}")
-        st.info(f"📈 95% Confidence: ₹{round(lower,2)} – ₹{round(upper,2)}")
+        st.success(f"🔮 Predicted: ₹{round(pred_price,2)} (in {days_ahead} days)")
+        st.info(f"📈 95% CI: ₹{round(lower,2)} – ₹{round(upper,2)}")
 
     if reversal:
-        st.warning("⚠️ Possible Trend Reversal Detected!")
+        st.warning("⚠️ Possible trend reversal!")
 
-# --- Main Execution ---
+# --- RUN ---
 if st.button("Run Prediction"):
     if not symbol_or_slug:
         st.error("Please enter a valid input.")
@@ -157,27 +173,26 @@ if st.button("Run Prediction"):
             label = f"{symbol_or_slug.upper()} Stock"
         else:
             df = get_nav_data(symbol_or_slug)
-            label = f"{symbol_or_slug.replace('-', ' ').title()} NAV"
+            label = f"{symbol_or_slug.title()} NAV"
 
         if df is None or df.empty:
-            st.error("❌ Data fetch failed.")
+            st.error("❌ No data available.")
         else:
-            st.success("✅ Data loaded.")
-            st.write(df.tail())
-            hotkey_code = hotkey.split()[0].strip("🔮🧠🌐🔀")
-            analyze_and_predict(df, days_ahead, label, hotkey_code)
+            st.write("✅ Data loaded:", df.tail())
+            code = hotkey.split()[0].strip("🔮🧠🌐🔀")
+            analyze_and_predict(df, days_ahead, label, code)
 
+            # Sentiment
             if asset_type == "Stock":
-                sentiment_df = get_news_sentiment(symbol_or_slug)
-                if not sentiment_df.empty:
+                sent_df = get_news_sentiment(symbol_or_slug)
+                if not sent_df.empty:
+                    avg_score = sent_df["score"].mean()
                     st.subheader("🧠 News Sentiment Over Time")
                     fig2, ax2 = plt.subplots()
-                    ax2.plot(sentiment_df["datetime"], sentiment_df["score"], marker="o")
+                    ax2.plot(sent_df["datetime"], sent_df["score"], marker='o')
                     ax2.axhline(0, color='gray', linestyle='--')
                     ax2.set_ylabel("Sentiment Score")
                     st.pyplot(fig2)
-
-                    avg_sent = sentiment_df["score"].mean()
-                    st.info(f"🧠 Avg Sentiment: {round(avg_sent,2)}")
-                    if avg_sent < -0.3:
-                        st.error("🚨 Negative Sentiment Detected — Review Carefully!")
+                    st.info(f"🧠 Avg News Sentiment: {round(avg_score,2)}")
+                    if avg_score < -0.3:
+                        st.error("🚨 Negative news sentiment detected.")
