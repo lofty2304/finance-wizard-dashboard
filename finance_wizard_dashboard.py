@@ -155,6 +155,7 @@ if st.button("Run Prediction"):
 
             if asset_type == "Stock":
                 sent_df = get_news_sentiment(symbol_or_slug)
+                st.write("🧪 News data:", sent_df.head())
                 if not sent_df.empty:
                     avg = sent_df["score"].mean()
                     st.subheader("🧠 News Sentiment")
