@@ -29,4 +29,24 @@ def get_stock_price(symbol):
     df = stock.history(period="60d")
     df = df.reset_index()
     return df[["date", "price"]].sort_values("date")
+if st.button("Run Prediction"):
+    if not symbol_or_slug:
+        st.error("Please enter a valid input.")
+    else:
+        st.write("🔄 Fetching data...")
+        if asset_type == "Stock":
+            df = get_stock_price(symbol_or_slug)
+            label = f"{symbol_or_slug.upper()} Stock"
+        else:
+            df = get_nav_data(symbol_or_slug)
+            label = f"{symbol_or_slug.replace('-', ' ').title()} NAV"
+
+        # New debug info
+        if df is None or df.empty:
+            st.error("❌ No data found. Check your input format.")
+            st.write("📦 Raw DataFrame: ", df)
+        else:
+            st.success("✅ Data successfully fetched.")
+            st.write("📊 Sample Data:", df.tail())
+            analyze_and_predict(df, days_ahead, label)
 
