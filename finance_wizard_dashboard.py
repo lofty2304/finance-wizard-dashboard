@@ -36,13 +36,20 @@ if st.button("Run Prediction"):
     if not symbol_or_slug:
         st.error("Please enter a valid input.")
     else:
-        st.write("🔄 Fetching data...")
         if asset_type == "Stock":
             df = get_stock_price(symbol_or_slug)
             label = f"{symbol_or_slug.upper()} Stock"
         else:
             df = get_nav_data(symbol_or_slug)
             label = f"{symbol_or_slug.replace('-', ' ').title()} NAV"
+
+        # ✅ Handle if df is empty or None
+        if df is None or df.empty:
+            st.error("❌ Failed to fetch data. Check the symbol or try again later.")
+            st.write("Raw output:", df)
+        else:
+            analyze_and_predict(df, days_ahead, label)
+
 
         # New debug info
         if df is None or df.empty:
