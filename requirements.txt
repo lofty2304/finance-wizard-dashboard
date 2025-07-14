@@ -8,3 +8,4 @@ requests
 openai
 finnhub-python
 ta  # 
+streamlit-autorefresh
