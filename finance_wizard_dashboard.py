@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,6 +15,43 @@ import ta
 # --- API KEYS ---
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
+# --- Auto-Refresh Every 10 Minutes ---
+st_autorefresh(interval=600000, key="auto-refresh")
+
+# --- NewsAPI Fetch + OpenAI Sentiment ---
+def fetch_news_sentiment():
+    try:
+        url = "https://newsapi.org/v2/top-headlines"
+        params = {
+            "q": "markets OR inflation OR interest rates OR oil OR war OR economy",
+            "language": "en",
+            "category": "business",
+            "apiKey": st.secrets["NEWS_API_KEY"]
+        }
+        response = requests.get(url, params=params)
+        articles = response.json().get("articles", [])[:5]
+        total_score = 0
+        for article in articles:
+            title = article["title"]
+            summary = article.get("description", "")
+            full_text = title + " " + summary
+            score = get_sentiment_score(full_text)
+            total_score += score
+        return round(total_score / max(1, len(articles)), 2)
+    except Exception as e:
+        st.warning(f"NewsAPI sentiment failed: {e}")
+        return 0
+
+# --- Display Sentiment Status ---
+st.subheader("📰 Live News Sentiment (Updated Every 10 Minutes)")
+news_sentiment = fetch_news_sentiment()
+if news_sentiment > 0.3:
+    st.success(f"📈 Positive Sentiment: {news_sentiment}")
+elif news_sentiment < -0.3:
+    st.error(f"📉 Negative Sentiment: {news_sentiment}")
+else:
+    st.info(f"⚖️ Neutral Sentiment: {news_sentiment}")
+
 
 # --- UI CONFIG ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
