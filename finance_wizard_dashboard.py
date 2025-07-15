@@ -11,6 +11,11 @@ import requests
 import openai
 import finnhub
 import ta
+rom sklearn.ensemble import RandomForestRegressor
+import xgboost as xgb
+from prophet import Prophet
+import joblib
+import os
 
 # --- API KEYS ---
 openai.api_key = st.secrets["OPENAI_API_KEY"]
@@ -100,6 +105,19 @@ def predict_price(df, days_ahead):
     return pred_price, pred_price - 1.96 * std_dev, pred_price + 1.96 * std_dev
 
 def get_sentiment_score(text):
+    # --- Model Caching ---
+from sklearn.ensemble import RandomForestRegressor
+import xgboost as xgb
+from prophet import Prophet
+import joblib
+import os
+
+CACHE_DIR = "cached_models"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def model_cache_key(symbol, model_name, days):
+    return os.path.join(CACHE_DIR, f"{symbol}_{model_name}_{days}.joblib")
+
     try:
         res = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -145,10 +163,48 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         downside = pred - 1.96 * vol * df["price"].iloc[-1]
         st.warning(f"📉 Estimated Downside: ₹{round(downside,2)} | Volatility: {round(vol*100,2)}%")
 
-    elif strategy_code == "ML":
+        elif strategy_code == "ML":
+        # 🧠 Base Polynomial
         model = LinearRegression().fit(X_poly, y)
-        pred_price = model.predict(poly.transform([[df["day_index"].max() + days_ahead]]))[0]
-        st.success(f"🧠 Polynomial ML Prediction: ₹{round(pred_price, 2)}")
+        pred = model.predict(poly.transform([[df["day_index"].max() + days_ahead]]))[0]
+        st.success(f"🧠 Polynomial ML Prediction: ₹{round(pred, 2)}")
+
+        # 🌲 Random Forest
+        rf_key = model_cache_key(symbol, "RF", days_ahead)
+        if os.path.exists(rf_key):
+            rf_model = joblib.load(rf_key)
+        else:
+            rf_model = RandomForestRegressor(n_estimators=100)
+            rf_model.fit(X, y)
+            joblib.dump(rf_model, rf_key)
+        rf_pred = rf_model.predict([[df["day_index"].max() + days_ahead]])[0]
+        st.success(f"🌲 Random Forest Prediction: ₹{round(rf_pred, 2)}")
+
+        # 🚀 XGBoost
+        xgb_key = model_cache_key(symbol, "XGB", days_ahead)
+        if os.path.exists(xgb_key):
+            xgb_model = joblib.load(xgb_key)
+        else:
+            xgb_model = xgb.XGBRegressor()
+            xgb_model.fit(X, y)
+            joblib.dump(xgb_model, xgb_key)
+        xgb_pred = xgb_model.predict([[df["day_index"].max() + days_ahead]])[0]
+        st.success(f"🚀 XGBoost Prediction: ₹{round(xgb_pred, 2)}")
+
+        # 🔮 Prophet
+        prophet_key = model_cache_key(symbol, "PROPHET", days_ahead)
+        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
+        if os.path.exists(prophet_key):
+            prophet_model = joblib.load(prophet_key)
+        else:
+            prophet_model = Prophet()
+            prophet_model.fit(prophet_df)
+            joblib.dump(prophet_model, prophet_key)
+        future = prophet_model.make_future_dataframe(periods=days_ahead)
+        forecast = prophet_model.predict(future)
+        prophet_price = forecast.iloc[-1]["yhat"]
+        st.success(f"🔮 Prophet Forecast: ₹{round(prophet_price, 2)}")
+
 
     elif strategy_code == "MC":
         model_lin = LinearRegression().fit(X, y)
