@@ -260,4 +260,5 @@ if st.button("Run Strategy"):
         if df is None or df.empty:
             st.error("❌ No data found. Try another ticker.")
         else:
-            analyze_and_predict(df, strategy.split("-")[0].strip().split()[-1], days_ahead, resolved_symbol, fetch_source)
+            analyze_and_predict(df, strategy.split("-")[0].strip().split()[-1], days_ahead, resolved, nav, nav_source)
+
