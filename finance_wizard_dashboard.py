@@ -11,7 +11,7 @@ import requests
 import openai
 import finnhub
 import ta
-rom sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
 from prophet import Prophet
 import joblib
