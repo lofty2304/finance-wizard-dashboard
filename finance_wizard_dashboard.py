@@ -28,7 +28,17 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # --- UI CONFIG ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
-st.title("🧙 Finance Wizard: Intelligent Market Dashboard")
+# --- Dashboard Header with Custom Image ---
+col1, col2 = st.columns([1, 5])
+with col1:
+    st.image("wizard_couple.png.JPG", width=100)
+with col2:
+    st.markdown("""
+    # 🧙 Finance Wizard lucia: Intelligent Market Dashboard  
+    *Powered by AI, real-time NAVs, and intelligent technical analysis.*
+    """)
+st.caption("🧡 Honoring 22 years of partnership and love.")
+
 
 # --- Sidebar options ---
 with st.sidebar:
