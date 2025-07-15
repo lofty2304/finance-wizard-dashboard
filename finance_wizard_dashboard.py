@@ -138,7 +138,20 @@ strategy = st.selectbox("📊 Strategy", [
     "⚖️ SE - Extreme Shock"
 ])
 
-symbol_input = st.text_input("Enter Stock/Mutual Fund Ticker", "NBCC.NS").upper()
+symbol_input = st.text_input(
+    "Enter Ticker (e.g. AAPL, INFY.NS, 7203.T, MC.PA, 9988.HK, 601857.SS)",
+    "AAPL"
+).upper()
+
+st.caption("""
+**📍 Ticker Format by Region**  
+- 🇺🇸 US: `AAPL`, `GOOG`, `MSFT`  
+- 🇮🇳 India: `INFY.NS`, `TCS.BO`  
+- 🇯🇵 Japan: `7203.T` (Toyota)  
+- 🇪🇺 Europe: `MC.PA` (LVMH), `BMW.DE`  
+- 🇨🇳 China: `9988.HK` (HK), `601857.SS` (Shanghai)
+""")
+
 days_ahead = st.slider("Forecast Horizon (Days)", 1, 30, 7)
 # --- Price Data Fetch ---
 def get_stock_price(symbol, live_nav):
