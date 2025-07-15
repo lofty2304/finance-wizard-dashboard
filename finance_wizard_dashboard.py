@@ -1,3 +1,4 @@
+# ... all your original imports ...
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
@@ -32,7 +33,17 @@ def model_cache_key(symbol, model_name, days):
 # --- Auto-refresh ---
 st_autorefresh(interval=600000, key="auto-refresh")
 
-# --- NewsAPI Sentiment ---
+# --- Yahoo Finance Search (No API Key) ---
+def search_yahoo_ticker(query):
+    url = "https://query1.finance.yahoo.com/v1/finance/search"
+    try:
+        res = requests.get(url, params={"q": query, "lang": "en"})
+        results = res.json().get("quotes", [])
+        return [(item["symbol"], item.get("shortname", "")) for item in results]
+    except:
+        return []
+
+# --- News Sentiment ---
 def fetch_news_sentiment():
     try:
         url = "https://newsapi.org/v2/top-headlines"
@@ -83,11 +94,12 @@ else:
 st.set_page_config(page_title="Finance Wizard", layout="centered")
 st.title("🧙 Finance Wizard: Intelligent Market Dashboard")
 
-# Sidebar switches
+# Sidebar
 with st.sidebar:
     show_r2 = st.checkbox("Show R² Scores", value=True)
     plot_future = st.checkbox("Plot 30-Day Forecast", value=False)
 
+# --- Strategy Select ---
 strategy = st.selectbox("🧠 Strategy", [
     "🔮 W - Predict One Stock",
     "🏦 A - Compare Stocks",
@@ -107,10 +119,28 @@ strategy = st.selectbox("🧠 Strategy", [
     "⚖️ SE - Extreme Shock"
 ])
 
-symbol_input = st.text_input("Enter Stock Ticker(s)", "INFY.NS")
 days_ahead = st.slider("Days Ahead to Forecast", 1, 30, 7)
 
-# --- DATA FETCH ---
+# --- Search Interface ---
+st.markdown("### 🔍 Search Ticker")
+query = st.text_input("Enter company name or ticker", "Apple")
+symbol_input = None
+
+if query:
+    matches = search_yahoo_ticker(query)
+    if matches:
+        selected = st.selectbox("Choose Ticker", [f"{s} - {n}" if n else s for s, n in matches])
+        symbol_input = selected.split(" - ")[0]
+    else:
+        st.warning("No results found. Check spelling or try a different company.")
+
+# --- Manual Override ---
+with st.expander("⚙️ Manual override"):
+    override = st.text_input("Enter exact ticker (optional)", "")
+    if override:
+        symbol_input = override.upper()
+
+# --- Data Fetch ---
 def get_stock_price(symbol):
     try:
         df = yf.Ticker(symbol).history(period="90d")
@@ -130,7 +160,7 @@ def predict_price(df, days_ahead):
     std_dev = np.std(y - model.predict(X))
     return pred_price, pred_price - 1.96 * std_dev, pred_price + 1.96 * std_dev
 
-# --- ANALYSIS ---
+# --- Core Analysis Logic ---
 def analyze_and_predict(df, strategy_code, days_ahead, symbol):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
@@ -143,15 +173,15 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
 
     if strategy_code == "W":
         pred, low, high = predict_price(df, days_ahead)
-        st.success(f"🔮 Prediction for {symbol} in {days_ahead} days: ₹{round(pred,2)}")
+        st.success(f"🔮 Prediction for {symbol} in {days_ahead} days: ₹{round(pred, 2)}")
         st.info(f"📈 Confidence Interval: ₹{round(low)} – ₹{round(high)}")
 
     elif strategy_code == "ML":
         model_poly = LinearRegression().fit(X_poly, y)
-        pred = model_poly.predict(poly.transform([[df["day_index"].max() + days_ahead]]))[0]
-        st.success(f"🧠 Polynomial ML Prediction: ₹{round(pred, 2)}")
+        pred = model_poly.predict(poly.transform([[X[-1][0] + days_ahead]]))[0]
+        st.success(f"🧠 Polynomial: ₹{round(pred, 2)}")
 
-        rf_model = RandomForestRegressor(n_estimators=100).fit(X, y)
+        rf_model = RandomForestRegressor().fit(X, y)
         st.success(f"🌲 Random Forest: ₹{round(rf_model.predict([[X[-1][0] + days_ahead]])[0], 2)}")
 
         xgb_model = xgb.XGBRegressor().fit(X, y)
@@ -159,19 +189,17 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
 
         prophet_df = df.rename(columns={"date": "ds", "price": "y"})
         prophet_model = Prophet().fit(prophet_df)
-        future = prophet_model.make_future_dataframe(periods=days_ahead)
-        forecast = prophet_model.predict(future)
+        forecast = prophet_model.predict(prophet_model.make_future_dataframe(periods=days_ahead))
         st.success(f"🔮 Prophet: ₹{round(forecast.iloc[-1]['yhat'], 2)}")
 
     elif strategy_code == "MC":
         model_lin = LinearRegression().fit(X, y)
         model_poly = LinearRegression().fit(X_poly, y)
-        rf_model = RandomForestRegressor(n_estimators=100).fit(X, y)
+        rf_model = RandomForestRegressor().fit(X, y)
         xgb_model = xgb.XGBRegressor().fit(X, y)
         prophet_df = df.rename(columns={"date": "ds", "price": "y"})
         prophet_model = Prophet().fit(prophet_df)
-        future = prophet_model.make_future_dataframe(periods=days_ahead)
-        forecast = prophet_model.predict(future)
+        forecast = prophet_model.predict(prophet_model.make_future_dataframe(periods=days_ahead))
 
         predictions = {
             "Linear": model_lin.predict([[X[-1][0] + days_ahead]])[0],
@@ -185,30 +213,27 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         st.bar_chart(pd.DataFrame(predictions.values(), index=predictions.keys(), columns=["Prediction"]))
 
         if show_r2:
-            r2s = {
+            st.subheader("📊 R² Scores")
+            scores = {
                 "Linear": r2_score(y, model_lin.predict(X)),
                 "Polynomial": r2_score(y, model_poly.predict(X_poly)),
                 "Random Forest": r2_score(y, rf_model.predict(X)),
                 "XGBoost": r2_score(y, xgb_model.predict(X)),
                 "Prophet": r2_score(y, forecast["yhat"][:len(y)])
             }
-            st.subheader("📊 R² Scores")
-            for model, score in r2s.items():
-                st.write(f"{model}: {round(score, 4)}")
+            for m, s in scores.items():
+                st.write(f"{m}: {round(s, 4)}")
 
         if plot_future:
-            future_days = 30
-            X_future = np.array([[i] for i in range(X[-1][0] + 1, X[-1][0] + future_days + 1)])
-            dates_future = pd.date_range(start=df["date"].max(), periods=future_days + 1, freq="D")[1:]
-            y_poly_future = model_poly.predict(poly.transform(X_future))
+            X_future = np.array([[i] for i in range(X[-1][0] + 1, X[-1][0] + 31)])
+            future_dates = pd.date_range(start=df["date"].max(), periods=31, freq="D")[1:]
+            y_future = model_poly.predict(poly.transform(X_future))
 
             fig, ax = plt.subplots()
             ax.plot(df["date"], y, label="Actual")
-            ax.plot(dates_future, y_poly_future, label="Polynomial Forecast", linestyle="--")
+            ax.plot(future_dates, y_future, label="30-Day Polynomial Forecast", linestyle="--")
             ax.legend()
             st.pyplot(fig)
-
-    # Other strategies like "S", "D", "TI", etc. remain the same...
 
     # Chart
     fig, ax = plt.subplots()
@@ -218,7 +243,7 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
     st.pyplot(fig)
 
 # --- EXECUTION ---
-if st.button("Run Strategy"):
+if st.button("Run Strategy") and symbol_input:
     strategy_code = strategy.split("-")[0].strip().split()[-1]
     if strategy_code == "A":
         tickers = [s.strip().upper() for s in symbol_input.split(",")]
@@ -238,6 +263,6 @@ if st.button("Run Strategy"):
     else:
         df = get_stock_price(symbol_input)
         if df is None or df.empty:
-            st.error("No data found.")
+            st.error("No data found for that ticker.")
         else:
             analyze_and_predict(df, strategy_code, days_ahead, symbol_input.upper())
