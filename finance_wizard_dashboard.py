@@ -35,9 +35,9 @@ st_autorefresh(interval=600000, key="auto-refresh")
 # --- NAV Fallback ---
 def get_latest_nav(symbol):
     try:
-        ticker = yf.Ticker(symbol)
-        nav = ticker.info.get("navPrice")
-        if nav: return nav
+        nav = yf.Ticker(symbol).info.get("navPrice")
+        if nav and nav > 0:
+            return nav
     except: pass
     try:
         txt = requests.get("https://www.amfiindia.com/spages/NAVAll.txt").text
@@ -45,10 +45,10 @@ def get_latest_nav(symbol):
             if symbol.upper() in line:
                 return float(line.split(";")[-1])
     except: pass
-    fallback = {"NBCC": 114.90}
-    return fallback.get(symbol.upper(), None)
+    manual_fallback = {"NBCC.NS": 114.90}
+    return manual_fallback.get(symbol.upper(), None)
 
-# --- News Sentiment ---
+# --- Sentiment Fetch ---
 def fetch_news_sentiment():
     try:
         url = "https://newsapi.org/v2/top-headlines"
@@ -60,13 +60,13 @@ def fetch_news_sentiment():
         }
         r = requests.get(url, params=params)
         articles = r.json().get("articles", [])[:5]
-        score = 0
+        total_score = 0
         for a in articles:
             text = a["title"] + " " + a.get("description", "")
-            score += get_sentiment_score(text)
-        return round(score / max(1, len(articles)), 2)
+            total_score += get_sentiment_score(text)
+        return round(total_score / max(1, len(articles)), 2)
     except Exception as e:
-        st.warning(f"Sentiment fetch failed: {e}")
+        st.warning(f"🛑 Sentiment API failed. Defaulting to 0. Error: {e}")
         return 0
 
 def get_sentiment_score(text):
@@ -82,27 +82,26 @@ def get_sentiment_score(text):
     except:
         return 0
 
-# --- Display Sentiment ---
+# --- Header and UI ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
 st.title("🧙 Finance Wizard: Intelligent Market Dashboard")
 
-st.subheader("📰 Global News Sentiment (Updated Every 10 Minutes)")
+st.subheader("📰 Global Market Sentiment (Updates Every 10 Minutes)")
 sentiment = fetch_news_sentiment()
 if sentiment > 0.3:
-    st.success(f"📈 Positive: {sentiment}")
+    st.success(f"📈 Positive Sentiment: {sentiment}")
 elif sentiment < -0.3:
-    st.error(f"📉 Negative: {sentiment}")
+    st.error(f"📉 Negative Sentiment: {sentiment}")
 else:
-    st.info(f"⚖️ Neutral: {sentiment}")
+    st.info(f"⚖️ Neutral Sentiment: {sentiment}")
 
-# --- UI Inputs ---
+# --- UI Options ---
 with st.sidebar:
     show_r2 = st.checkbox("Show R² Scores", value=True)
     plot_future = st.checkbox("Plot 7-Day Forecast", value=True)
 
 strategy = st.selectbox("📊 Choose Strategy", [
     "🔮 W - Predict One Stock",
-    "🏦 A - Compare Stocks",
     "🕵️ S - Stock Deep Dive",
     "📉 D - Downside Risk",
     "🧠 ML - Polynomial Forecast",
@@ -119,10 +118,10 @@ strategy = st.selectbox("📊 Choose Strategy", [
     "⚖️ SE - Extreme Shock"
 ])
 
-symbol_input = st.text_input("📌 Enter Ticker", "INFY.NS").upper()
-days_ahead = st.slider("⏳ Days Ahead to Forecast", 1, 30, 7)
+symbol_input = st.text_input("Enter Stock or Fund Ticker", "NBCC.NS").upper()
+days_ahead = st.slider("Days Ahead to Forecast", 1, 30, 7)
 
-# --- Fetch Stock or NAV Data ---
+# --- Data Loader ---
 def get_stock_price(symbol):
     try:
         df = yf.Ticker(symbol).history(period="90d")
@@ -151,14 +150,13 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
     y = df["price"].values
+    df["MA5"] = df["price"].rolling(5).mean()
     poly = PolynomialFeatures(degree=3)
     X_poly = poly.fit_transform(X)
-    df["MA5"] = df["price"].rolling(5).mean()
 
     st.subheader(f"📊 Strategy: {strategy_code}")
 
-    # Shared forecast block for 7-day future
-    def plot_forecast_curve(model, model_type="Polynomial"):
+    def plot_forecast(model, model_type="Polynomial"):
         if not plot_future:
             return
         future_days = 7
@@ -168,7 +166,6 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
             y_future = model.predict(poly.transform(X_future))
         else:
             y_future = model.predict(X_future)
-
         fig, ax = plt.subplots()
         ax.plot(df["date"], y, label="Actual")
         ax.plot(dates_future, y_future, label="7-Day Forecast", linestyle="--")
@@ -179,128 +176,130 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
     if strategy_code == "W":
         st.markdown("""
         **🔮 Predict One Stock**  
-        Uses a linear regression model over the last 90 days to predict future price movement.
-        Useful for fast forecasting when data is limited.
+        Uses linear regression on the past 90 days to project the price forward.  
+        Suitable for short-term forecasts based on existing trends.
         """)
-        st.dataframe(df[["date", "price"]].tail(10))
         pred, low, high = predict_price(df, days_ahead)
-        st.success(f"Prediction in {days_ahead} days: ₹{round(pred,2)}")
+        st.metric("Forecast", f"₹{round(pred,2)}")
         st.info(f"Confidence Interval: ₹{round(low)} – ₹{round(high)}")
 
     elif strategy_code == "ML":
         st.markdown("""
-        **🧠 ML Polynomial Forecast**  
-        Applies Polynomial regression, Random Forest, XGBoost and Prophet to generate forecasts.
-        Ideal for pattern recognition in price data.
+        **🧠 Polynomial Forecast (ML)**  
+        Applies Polynomial Regression, Random Forest, XGBoost, and Prophet for machine-learned forecasting.  
+        Returns a composite view of different model predictions.
         """)
         model_poly = LinearRegression().fit(X_poly, y)
-        rf_model = RandomForestRegressor().fit(X, y)
-        xgb_model = xgb.XGBRegressor().fit(X, y)
-        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
-        prophet_model = Prophet().fit(prophet_df)
-        forecast = prophet_model.predict(prophet_model.make_future_dataframe(periods=days_ahead))
+        rf = RandomForestRegressor().fit(X, y)
+        xg = xgb.XGBRegressor().fit(X, y)
+
+        prophet_df = df.rename(columns={"date": "ds", "price": "y"}).dropna()
+        prophet_df = prophet_df[~prophet_df["ds"].duplicated()]
+        if len(prophet_df) > 10 and prophet_df["y"].nunique() > 1:
+            prophet_model = Prophet().fit(prophet_df)
+            future = prophet_model.make_future_dataframe(periods=days_ahead)
+            forecast = prophet_model.predict(future)
+            prophet_value = forecast["yhat"].iloc[-1]
+        else:
+            prophet_value = "N/A"
+            st.warning("📉 Not enough variance for Prophet prediction.")
 
         st.metric("Polynomial", round(model_poly.predict(poly.transform([[X[-1][0] + days_ahead]]))[0], 2))
-        st.metric("Random Forest", round(rf_model.predict([[X[-1][0] + days_ahead]])[0], 2))
-        st.metric("XGBoost", round(xgb_model.predict([[X[-1][0] + days_ahead]])[0], 2))
-        st.metric("Prophet", round(forecast.iloc[-1]["yhat"], 2))
+        st.metric("Random Forest", round(rf.predict([[X[-1][0] + days_ahead]])[0], 2))
+        st.metric("XGBoost", round(xg.predict([[X[-1][0] + days_ahead]])[0], 2))
+        st.metric("Prophet", prophet_value)
 
-        plot_forecast_curve(model_poly)
+        plot_forecast(model_poly)
 
     elif strategy_code == "MC":
         st.markdown("""
         **⚖️ ML Model Comparison**  
-        Compares five models: Linear, Polynomial, Random Forest, XGBoost, and Prophet.
-        R² scores help evaluate fit accuracy.
+        Compares Linear, Polynomial, Random Forest, XGBoost, and Prophet predictions side-by-side.  
+        R² Scores reveal how well models fit the current trend.
         """)
         model_lin = LinearRegression().fit(X, y)
         model_poly = LinearRegression().fit(X_poly, y)
-        rf_model = RandomForestRegressor().fit(X, y)
-        xgb_model = xgb.XGBRegressor().fit(X, y)
-        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
-        prophet_model = Prophet().fit(prophet_df)
-        forecast = prophet_model.predict(prophet_model.make_future_dataframe(periods=days_ahead))
+        rf = RandomForestRegressor().fit(X, y)
+        xg = xgb.XGBRegressor().fit(X, y)
+
+        prophet_df = df.rename(columns={"date": "ds", "price": "y"}).dropna()
+        prophet_df = prophet_df[~prophet_df["ds"].duplicated()]
+        if len(prophet_df) > 10 and prophet_df["y"].nunique() > 1:
+            prophet_model = Prophet().fit(prophet_df)
+            future = prophet_model.make_future_dataframe(periods=days_ahead)
+            forecast = prophet_model.predict(future)
+            prophet_pred = forecast["yhat"].iloc[-1]
+            r2_prophet = r2_score(y, forecast["yhat"][:len(y)])
+        else:
+            prophet_pred = "N/A"
+            r2_prophet = None
+            st.warning("📉 Prophet disabled due to data constraints.")
 
         preds = {
             "Linear": model_lin.predict([[X[-1][0] + days_ahead]])[0],
             "Polynomial": model_poly.predict(poly.transform([[X[-1][0] + days_ahead]]))[0],
-            "Random Forest": rf_model.predict([[X[-1][0] + days_ahead]])[0],
-            "XGBoost": xgb_model.predict([[X[-1][0] + days_ahead]])[0],
-            "Prophet": forecast["yhat"].iloc[-1]
+            "Random Forest": rf.predict([[X[-1][0] + days_ahead]])[0],
+            "XGBoost": xg.predict([[X[-1][0] + days_ahead]])[0],
+            "Prophet": prophet_pred
         }
 
         st.dataframe(pd.DataFrame(preds.items(), columns=["Model", "Prediction"]))
-        st.bar_chart(pd.DataFrame(preds.values(), index=preds.keys(), columns=["Price"]))
-
         if show_r2:
             r2s = {
                 "Linear": r2_score(y, model_lin.predict(X)),
                 "Polynomial": r2_score(y, model_poly.predict(X_poly)),
-                "Random Forest": r2_score(y, rf_model.predict(X)),
-                "XGBoost": r2_score(y, xgb_model.predict(X)),
-                "Prophet": r2_score(y, forecast["yhat"][:len(y)])
+                "Random Forest": r2_score(y, rf.predict(X)),
+                "XGBoost": r2_score(y, xg.predict(X)),
+                "Prophet": r2_prophet
             }
-            st.subheader("📈 R² Scores")
+            st.subheader("📊 R² Scores (Goodness of Fit)")
             for model, score in r2s.items():
-                st.write(f"{model}: {round(score, 4)}")
-
-        plot_forecast_curve(model_poly)
+                if score is not None:
+                    st.write(f"{model}: {round(score, 4)} — Measures how well the model fits past price behavior. 1.0 = perfect fit.")
+        plot_forecast(model_poly)
 
     elif strategy_code == "D":
         st.markdown("""
         **📉 Downside Risk**  
-        Uses historical volatility to estimate possible loss with 95% confidence over the next period.
+        Uses predicted price and market volatility to estimate 95% downside scenario.
         """)
-        returns = df["price"].pct_change().dropna()
-        vol = np.std(returns)
         pred, _, _ = predict_price(df, days_ahead)
-        downside = pred - 1.96 * vol * df["price"].iloc[-1]
+        vol = np.std(df["price"].pct_change().dropna())
+        current = df["price"].iloc[-1]
+        downside = pred - 1.96 * vol * current
+
+        st.metric("Predicted Price", f"₹{round(pred, 2)}")
+        st.metric("Current Price", f"₹{round(current, 2)}")
         st.metric("Volatility", f"{round(vol*100, 2)}%")
-        st.metric("Estimated Downside", f"₹{round(downside, 2)}")
-        fig, ax = plt.subplots()
-        ax.pie([downside, df["price"].iloc[-1]], labels=["Downside", "Current"], autopct="%1.1f%%")
-        st.pyplot(fig)
+        st.metric("Downside", f"₹{round(downside, 2)}")
+        if downside > current:
+            st.info("⚠️ Downside is still above current price due to upward trend in prediction.")
+        else:
+            st.warning("📉 Potential drop below current market value.")
 
     elif strategy_code in ["SA", "SC", "SD", "SE"]:
-        multipliers = {
-            "SA": 1.10, "SC": 1.02, "SD": 0.95, "SE": 0.80
-        }
         labels = {
-            "SA": "🟢 Optimistic", "SC": "🟡 Conservative",
-            "SD": "🔴 Pessimistic", "SE": "⚖️ Extreme Shock"
+            "SA": "🟢 Optimistic",
+            "SC": "🟡 Conservative",
+            "SD": "🔴 Pessimistic",
+            "SE": "⚠️ Extreme Shock"
         }
-        base_pred, _, _ = predict_price(df, days_ahead)
-        pred_price = base_pred * multipliers[strategy_code]
+        multipliers = {"SA": 1.10, "SC": 1.02, "SD": 0.95, "SE": 0.80}
+        base_price = get_latest_nav(symbol) or df["price"].iloc[-1]
+        forecast = base_price * multipliers[strategy_code]
         st.markdown(f"""
         **{labels[strategy_code]} Scenario**  
-        Simulates outcome under stress or optimism with a price multiplier.
+        Based on adjusted multiplier of real NAV or current price (₹{round(base_price,2)}).
         """)
-        st.metric("Scenario Forecast", f"₹{round(pred_price, 2)}")
-        st.bar_chart(pd.DataFrame([base_pred, pred_price], index=["Base", labels[strategy_code]], columns=["Price"]))
-
-    elif strategy_code == "TD":
-        st.markdown("""
-        **💡 Explain Indicators**  
-        - RSI: Relative Strength Index (momentum)
-        - MACD: Trend/momentum crossover
-        - Bollinger Bands: Volatility breakouts
-        - EMA: Smooth trend direction
-        - MA5: 5-day moving average (shows recent trend)
-        """)
-
-    elif strategy_code == "TE":
-        st.warning("""
-        **⚠️ Limitations of Technical Indicators**  
-        - Lagging indicators
-        - No volume or macro consideration
-        - Should be used with sentiment + fundamentals
-        """)
+        st.metric("Scenario Forecast", f"₹{round(forecast, 2)}")
+        st.bar_chart(pd.DataFrame([base_price, forecast], index=["Base", labels[strategy_code]], columns=["Price"]))
     elif strategy_code == "TI":
         st.markdown("""
         **📉 Technical Indicator Forecast**  
-        - RSI: Detect overbought/oversold zones  
-        - MACD: Momentum shifts  
-        - Bollinger Bands: Volatility and mean-reversion
+        Uses 3 classic indicators:  
+        - **RSI** (Relative Strength Index): Momentum; overbought >70, oversold <30  
+        - **MACD**: Trend momentum and crossovers  
+        - **Bollinger Bands**: Price volatility envelopes  
         """)
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         macd = ta.trend.MACD(df["price"])
@@ -319,13 +318,13 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         ax.tick_params(axis="x", rotation=45)
         ax.legend()
         st.pyplot(fig)
-        st.caption("📘 MA5 = 5-Day Moving Average")
 
     elif strategy_code == "TC":
         st.markdown("""
         **↔️ Compare Indicators**  
-        - **RSI**: Detect momentum extremes  
-        - **EMA20**: Identify smoothed price trend
+        - **RSI**: Measures strength of price action.  
+        - **EMA20**: Exponential Moving Average of past 20 days.  
+        Helps identify **momentum direction**.
         """)
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         df["EMA20"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
@@ -335,49 +334,80 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
     elif strategy_code == "S":
         st.markdown("""
         **🕵️ Stock Deep Dive**  
-        Combines RSI, MACD, MA5 and Sentiment Score for holistic insight into a stock's health.
+        Combines short-term technicals with AI sentiment scoring.
         """)
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         macd = ta.trend.MACD(df["price"])
         df["MACD"] = macd.macd()
         df["Signal"] = macd.macd_signal()
         df["MA5"] = df["price"].rolling(5).mean()
+
         st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "MA5"]].tail(10))
+
         sent_score = get_sentiment_score(symbol)
-        st.info(f"🧠 Sentiment Score: {round(sent_score, 2)}")
+        st.metric("Sentiment Score", round(sent_score, 2))
+        st.markdown("""
+        **🧠 Sentiment Score Meaning:**  
+        - **+1** = Very positive news flow  
+        - **0** = Neutral  
+        - **–1** = Very negative financial sentiment  
+        Based on recent business and macro headlines.
+        """)
 
     elif strategy_code == "MD":
         st.markdown("""
         **🧐 Model Explanation**  
-        Visualize how well Polynomial model fits actual data.
+        Fits Polynomial model to historical price, and shows how closely it matches.  
+        Helps visualize **fit quality**.  
+        **R² Score** explains how much of the price movement is captured by the model.
         """)
         model = LinearRegression().fit(X_poly, y)
         pred = model.predict(X_poly)
         fig, ax = plt.subplots()
         ax.plot(df["date"], y, label="Actual")
-        ax.plot(df["date"], pred, label="Predicted", linestyle="--")
+        ax.plot(df["date"], pred, label="Polynomial Fit", linestyle="--")
+        ax.tick_params(axis="x", rotation=45)
         ax.legend()
         st.pyplot(fig)
-        r2 = model.score(X_poly, y)
-        st.metric("R² Score", round(r2, 4))
+        st.metric("R² Score", round(model.score(X_poly, y), 4))
+        st.caption("Higher R² = Better model fit to actual price history.")
 
     elif strategy_code == "ME":
         st.markdown("""
-        **❓ ML Uncertainty**  
-        Shows the variation between model predictions and actual values to estimate risk of misfit.
+        **❓ ML Model Uncertainty**  
+        Calculates prediction **error deviation**, giving insight into how risky a forecast might be.
         """)
         model = LinearRegression().fit(X_poly, y)
         pred = model.predict(X_poly)
         std_dev = np.std(y - pred)
-        st.warning(f"Prediction Std Deviation: ±₹{round(std_dev, 2)}")
+        st.warning(f"Prediction Standard Deviation: ± ₹{round(std_dev, 2)}")
 
-    # Final price chart for all
+    elif strategy_code == "TD":
+        st.markdown("""
+        **💡 Indicator Definitions**  
+        - **RSI**: Measures momentum (scale 0–100)  
+        - **MACD**: Shows trend reversals  
+        - **Bollinger Bands**: Price range vs. volatility  
+        - **EMA**: Smooth average trend  
+        - **MA5**: 5-day Simple Moving Average  
+        Use indicators in **combination**, not isolation.
+        """)
+
+    elif strategy_code == "TE":
+        st.markdown("""
+        **⚠️ Limitations of Indicators**  
+        - All indicators are **lagging**  
+        - May mislead during high-volatility periods  
+        - Ignore fundamentals or volume  
+        Use them with sentiment, macro, and machine learning!
+        """)
+
+    # Final price chart
     fig, ax = plt.subplots()
     ax.plot(df["date"], df["price"], label="Price")
-    ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--")
+    ax.plot(df["date"], df["MA5"], label="MA5 (5-Day Avg)", linestyle="--")
     ax.tick_params(axis="x", rotation=45)
     ax.legend()
-    ax.set_title(f"{symbol} | Price and 5-Day Moving Average")
     st.pyplot(fig)
 
 # --- EXECUTION ---
@@ -385,6 +415,6 @@ if st.button("Run Strategy"):
     strategy_code = strategy.split("-")[0].strip().split()[-1]
     df = get_stock_price(symbol_input)
     if df is None or df.empty:
-        st.error("❌ No data found. Please check the symbol or try another.")
+        st.error("❌ No data found. Check the ticker or symbol.")
     else:
         analyze_and_predict(df, strategy_code, days_ahead, symbol_input)
