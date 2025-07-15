@@ -206,23 +206,106 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         st.success(f"🔮 Prophet Forecast: ₹{round(prophet_price, 2)}")
 
 
-    elif strategy_code == "MC":
-        model_lin = LinearRegression().fit(X, y)
-        pred_lin = model_lin.predict([[df["day_index"].max() + days_ahead]])[0]
-        model_poly = LinearRegression().fit(X_poly, y)
-        pred_poly = model_poly.predict(poly.transform([[df["day_index"].max() + days_ahead]]))[0]
-        st.write(f"Linear: ₹{round(pred_lin, 2)} | Poly: ₹{round(pred_poly, 2)}")
+    e    elif strategy_code == "MC":
+        st.info("⚖️ Comparing predictions from multiple ML models...")
 
-    elif strategy_code == "MD":
-        model = LinearRegression().fit(X_poly, y)
-        pred = model.predict(X_poly)
-        residuals = y - pred
-        st.write("R² Score:", model.score(X_poly, y))
+        future_index = df["day_index"].max() + days_ahead
+
+        # Linear
+        model_lin = LinearRegression().fit(X, y)
+        pred_lin = model_lin.predict([[future_index]])[0]
+
+        # Polynomial
+        model_poly = LinearRegression().fit(X_poly, y)
+        pred_poly = model_poly.predict(poly.transform([[future_index]]))[0]
+
+        # Random Forest
+        rf_key = model_cache_key(symbol, "RF", days_ahead)
+        if os.path.exists(rf_key):
+            rf_model = joblib.load(rf_key)
+        else:
+            rf_model = RandomForestRegressor(n_estimators=100)
+            rf_model.fit(X, y)
+            joblib.dump(rf_model, rf_key)
+        pred_rf = rf_model.predict([[future_index]])[0]
+
+        # XGBoost
+        xgb_key = model_cache_key(symbol, "XGB", days_ahead)
+        if os.path.exists(xgb_key):
+            xgb_model = joblib.load(xgb_key)
+        else:
+            xgb_model = xgb.XGBRegressor()
+            xgb_model.fit(X, y)
+            joblib.dump(xgb_model, xgb_key)
+        pred_xgb = xgb_model.predict([[future_index]])[0]
+
+        # Prophet
+        prophet_key = model_cache_key(symbol, "PROPHET", days_ahead)
+        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
+        if os.path.exists(prophet_key):
+            prophet_model = joblib.load(prophet_key)
+        else:
+            prophet_model = Prophet()
+            prophet_model.fit(prophet_df)
+            joblib.dump(prophet_model, prophet_key)
+        future = prophet_model.make_future_dataframe(periods=days_ahead)
+        forecast = prophet_model.predict(future)
+        pred_prophet = forecast.iloc[-1]["yhat"]
+
+        predictions = {
+            "Linear": pred_lin,
+            "Polynomial": pred_poly,
+            "Random Forest": pred_rf,
+            "XGBoost": pred_xgb,
+            "Prophet": pred_prophet
+        }
+
+        df_preds = pd.DataFrame(predictions.items(), columns=["Model", "Prediction"])
+        st.dataframe(df_preds)
+        st.bar_chart(df_preds.set_index("Model"))
+
+
+        elif strategy_code == "MD":
+        st.info("🧐 Plotting Actual vs Predicted values for ML models...")
+
+        # Actual timeline
+        dates = df["date"]
+        preds = {}
+
+        # Polynomial
+        model_poly = LinearRegression().fit(X_poly, y)
+        preds["Polynomial"] = model_poly.predict(X_poly)
+
+        # Random Forest
+        rf_model = RandomForestRegressor(n_estimators=100).fit(X, y)
+        preds["Random Forest"] = rf_model.predict(X)
+
+        # XGBoost
+        xgb_model = xgb.XGBRegressor().fit(X, y)
+        preds["XGBoost"] = xgb_model.predict(X)
+
+        # Prophet
+        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
+        prophet_model = Prophet().fit(prophet_df)
+        future = prophet_model.make_future_dataframe(periods=0)
+        forecast = prophet_model.predict(future)
+        preds["Prophet"] = forecast["yhat"].values
+
+        # Plot all
         fig, ax = plt.subplots()
-        ax.plot(df["date"], y, label="Actual")
-        ax.plot(df["date"], pred, label="Predicted", linestyle="--")
+        ax.plot(dates, y, label="Actual", linewidth=2)
+        for model_name, yhat in preds.items():
+            ax.plot(dates, yhat, label=model_name)
         ax.legend()
+        ax.set_title("Actual vs Predicted")
         st.pyplot(fig)
+
+        # Residual summary
+        st.subheader("Residual Std Dev (Prediction Error):")
+        for name, yhat in preds.items():
+            error = np.std(y - yhat)
+            st.write(f"{name}: ±₹{round(error, 2)}")
+
 
     elif strategy_code == "ME":
         model = LinearRegression().fit(X_poly, y)
