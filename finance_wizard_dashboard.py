@@ -263,6 +263,48 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         df_preds = pd.DataFrame(predictions.items(), columns=["Model", "Prediction"])
         st.dataframe(df_preds)
         st.bar_chart(df_preds.set_index("Model"))
+from sklearn.metrics import r2_score
+
+# After predicting all models
+r2_scores = {
+    "Linear": r2_score(y, model_lin.predict(X)),
+    "Polynomial": r2_score(y, model_poly.predict(X_poly)),
+    "Random Forest": r2_score(y, rf_model.predict(X)),
+    "XGBoost": r2_score(y, xgb_model.predict(X)),
+    "Prophet": r2_score(y, preds["Prophet"])  # from MD block
+}
+
+st.subheader("📊 R² Scores")
+for model, score in r2_scores.items():
+    st.write(f"{model}: {round(score, 4)}")
+# Forecast X values beyond existing
+future_days = 30  # can be slider-controlled
+X_future = np.array([[i] for i in range(df["day_index"].max() + 1, df["day_index"].max() + future_days + 1)])
+dates_future = pd.date_range(start=df["date"].max(), periods=future_days + 1, freq="D")[1:]
+
+# Polynomial Model Example
+y_poly_future = model_poly.predict(poly.transform(X_future))
+
+fig, ax = plt.subplots()
+ax.plot(df["date"], y, label="Actual")
+ax.plot(dates_future, y_poly_future, label="Forecast", linestyle="--")
+ax.set_title(f"📈 30-Day Forecast with Polynomial")
+ax.legend()
+st.pyplot(fig)
+model_select = st.selectbox("Choose model to plot:", ["Polynomial", "Random Forest", "XGBoost", "Prophet"])
+model_preds = {
+    "Polynomial": model_poly.predict(X_poly),
+    "Random Forest": rf_model.predict(X),
+    "XGBoost": xgb_model.predict(X),
+    "Prophet": preds["Prophet"]  # as defined earlier
+}
+
+fig, ax = plt.subplots()
+ax.plot(df["date"], y, label="Actual")
+ax.plot(df["date"], model_preds[model_select], label=model_select)
+ax.legend()
+st.pyplot(fig)
+
 
 
         elif strategy_code == "MD":
@@ -305,6 +347,21 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         for name, yhat in preds.items():
             error = np.std(y - yhat)
             st.write(f"{name}: ±₹{round(error, 2)}")
+            # Forecast X values beyond existing
+future_days = 30  # can be slider-controlled
+X_future = np.array([[i] for i in range(df["day_index"].max() + 1, df["day_index"].max() + future_days + 1)])
+dates_future = pd.date_range(start=df["date"].max(), periods=future_days + 1, freq="D")[1:]
+
+# Polynomial Model Example
+y_poly_future = model_poly.predict(poly.transform(X_future))
+
+fig, ax = plt.subplots()
+ax.plot(df["date"], y, label="Actual")
+ax.plot(dates_future, y_poly_future, label="Forecast", linestyle="--")
+ax.set_title(f"📈 30-Day Forecast with Polynomial")
+ax.legend()
+st.pyplot(fig)
+
 
 
     elif strategy_code == "ME":
@@ -375,3 +432,6 @@ if st.button("Run Strategy"):
             st.error("No data found.")
         else:
             analyze_and_predict(df, strategy_code, days_ahead, symbol_input.upper())
+            with st.sidebar:
+    show_r2 = st.checkbox("Show R² Scores", value=True)
+    plot_future = st.checkbox("Plot 30-Day Forecast", value=True)
