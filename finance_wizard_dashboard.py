@@ -53,10 +53,31 @@ strategy = st.selectbox("🧠 Strategy", [
 ])
 
 # --- User Input ---
+# --- User Guidance ---
+st.markdown("""
+### 🧾 Input Guidelines
+
+#### ✅ Mutual Funds
+- Enter **AMFI Scheme Code** (e.g. `150252`) or full scheme name.
+- Fund names are resolved using OpenAI and AMFI data.
+- NAV fallback applies if Yahoo historical prices are not available.
+
+#### 🌍 Stock Ticker Format by Region
+- 🇺🇸 **US Stocks**: `AAPL`, `TSLA`, `GOOG`
+- 🇮🇳 **India (NSE/BSE)**: `INFY.NS`, `TCS.BO`, `NBCC.NS`
+- 🇯🇵 **Japan (TSE)**: `7203.T` (Toyota)
+- 🇪🇺 **Europe**: `MC.PA` (LVMH), `BMW.DE` (Germany)
+- 🇨🇳 **China**: `9988.HK` (HKEX), `601857.SS` (Shanghai)
+
+💡 *Tip: Check Yahoo Finance or your broker for the correct ticker if you're unsure.*
+""")
+
+# --- Input Box ---
 fund_name_input = st.text_input(
-    "Enter Fund Name or Ticker (e.g. AAPL, INFY.NS, Axis Global Equity Alpha Fund)",
+    "Enter Ticker / Mutual Fund Name / AMFI Code",
     "NBCC.NS"
 )
+
 
 # --- Resolve Fund Name to Ticker using GPT ---
 def resolve_fund_name_to_ticker(name):
