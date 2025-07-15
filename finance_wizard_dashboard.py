@@ -5,25 +5,34 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
+from sklearn.ensemble import RandomForestRegressor
+import xgboost as xgb
+from prophet import Prophet
+from sklearn.metrics import r2_score
+import joblib
+import os
 from datetime import datetime
 import yfinance as yf
 import requests
 import openai
 import finnhub
 import ta
-from sklearn.ensemble import RandomForestRegressor
-import xgboost as xgb
-from prophet import Prophet
-import joblib
-import os
 
 # --- API KEYS ---
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
-# --- Auto-Refresh Every 10 Minutes ---
+
+# --- Cache directory ---
+CACHE_DIR = "cached_models"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def model_cache_key(symbol, model_name, days):
+    return os.path.join(CACHE_DIR, f"{symbol}_{model_name}_{days}.joblib")
+
+# --- Auto-refresh ---
 st_autorefresh(interval=600000, key="auto-refresh")
 
-# --- NewsAPI Fetch + OpenAI Sentiment ---
+# --- NewsAPI Sentiment ---
 def fetch_news_sentiment():
     try:
         url = "https://newsapi.org/v2/top-headlines"
@@ -47,7 +56,20 @@ def fetch_news_sentiment():
         st.warning(f"NewsAPI sentiment failed: {e}")
         return 0
 
-# --- Display Sentiment Status ---
+def get_sentiment_score(text):
+    try:
+        res = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Score financial sentiment from -1 to 1."},
+                {"role": "user", "content": text}
+            ]
+        )
+        return float(res["choices"][0]["message"]["content"].strip())
+    except:
+        return 0
+
+# --- Display Sentiment ---
 st.subheader("📰 Live News Sentiment (Updated Every 10 Minutes)")
 news_sentiment = fetch_news_sentiment()
 if news_sentiment > 0.3:
@@ -57,10 +79,14 @@ elif news_sentiment < -0.3:
 else:
     st.info(f"⚖️ Neutral Sentiment: {news_sentiment}")
 
-
 # --- UI CONFIG ---
 st.set_page_config(page_title="Finance Wizard", layout="centered")
 st.title("🧙 Finance Wizard: Intelligent Market Dashboard")
+
+# Sidebar switches
+with st.sidebar:
+    show_r2 = st.checkbox("Show R² Scores", value=True)
+    plot_future = st.checkbox("Plot 30-Day Forecast", value=False)
 
 strategy = st.selectbox("🧠 Strategy", [
     "🔮 W - Predict One Stock",
@@ -104,33 +130,7 @@ def predict_price(df, days_ahead):
     std_dev = np.std(y - model.predict(X))
     return pred_price, pred_price - 1.96 * std_dev, pred_price + 1.96 * std_dev
 
-def get_sentiment_score(text):
-    # --- Model Caching ---
-from sklearn.ensemble import RandomForestRegressor
-import xgboost as xgb
-from prophet import Prophet
-import joblib
-import os
-
-CACHE_DIR = "cached_models"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-def model_cache_key(symbol, model_name, days):
-    return os.path.join(CACHE_DIR, f"{symbol}_{model_name}_{days}.joblib")
-
-    try:
-        res = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Score financial sentiment from -1 to 1."},
-                {"role": "user", "content": text}
-            ]
-        )
-        return float(res["choices"][0]["message"]["content"].strip())
-    except:
-        return 0
-
-# --- ANALYSIS LOGIC ---
+# --- ANALYSIS ---
 def analyze_and_predict(df, strategy_code, days_ahead, symbol):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
@@ -146,260 +146,69 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol):
         st.success(f"🔮 Prediction for {symbol} in {days_ahead} days: ₹{round(pred,2)}")
         st.info(f"📈 Confidence Interval: ₹{round(low)} – ₹{round(high)}")
 
-    elif strategy_code == "S":
-        analyze_and_predict(df, "W", days_ahead, symbol)
-        df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-        macd = ta.trend.MACD(df["price"])
-        df["MACD"] = macd.macd()
-        df["Signal"] = macd.macd_signal()
-        st.write(df[["date", "price", "RSI", "MACD", "Signal"]].tail())
-        sent_score = get_sentiment_score(symbol)
-        st.info(f"🧠 Sentiment Score: {round(sent_score, 2)}")
-
-    elif strategy_code == "D":
-        pred, _, _ = predict_price(df, days_ahead)
-        returns = df["price"].pct_change().dropna()
-        vol = np.std(returns)
-        downside = pred - 1.96 * vol * df["price"].iloc[-1]
-        st.warning(f"📉 Estimated Downside: ₹{round(downside,2)} | Volatility: {round(vol*100,2)}%")
-
-        elif strategy_code == "ML":
-        # 🧠 Base Polynomial
-        model = LinearRegression().fit(X_poly, y)
-        pred = model.predict(poly.transform([[df["day_index"].max() + days_ahead]]))[0]
+    elif strategy_code == "ML":
+        model_poly = LinearRegression().fit(X_poly, y)
+        pred = model_poly.predict(poly.transform([[df["day_index"].max() + days_ahead]]))[0]
         st.success(f"🧠 Polynomial ML Prediction: ₹{round(pred, 2)}")
 
-        # 🌲 Random Forest
-        rf_key = model_cache_key(symbol, "RF", days_ahead)
-        if os.path.exists(rf_key):
-            rf_model = joblib.load(rf_key)
-        else:
-            rf_model = RandomForestRegressor(n_estimators=100)
-            rf_model.fit(X, y)
-            joblib.dump(rf_model, rf_key)
-        rf_pred = rf_model.predict([[df["day_index"].max() + days_ahead]])[0]
-        st.success(f"🌲 Random Forest Prediction: ₹{round(rf_pred, 2)}")
-
-        # 🚀 XGBoost
-        xgb_key = model_cache_key(symbol, "XGB", days_ahead)
-        if os.path.exists(xgb_key):
-            xgb_model = joblib.load(xgb_key)
-        else:
-            xgb_model = xgb.XGBRegressor()
-            xgb_model.fit(X, y)
-            joblib.dump(xgb_model, xgb_key)
-        xgb_pred = xgb_model.predict([[df["day_index"].max() + days_ahead]])[0]
-        st.success(f"🚀 XGBoost Prediction: ₹{round(xgb_pred, 2)}")
-
-        # 🔮 Prophet
-        prophet_key = model_cache_key(symbol, "PROPHET", days_ahead)
-        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
-        if os.path.exists(prophet_key):
-            prophet_model = joblib.load(prophet_key)
-        else:
-            prophet_model = Prophet()
-            prophet_model.fit(prophet_df)
-            joblib.dump(prophet_model, prophet_key)
-        future = prophet_model.make_future_dataframe(periods=days_ahead)
-        forecast = prophet_model.predict(future)
-        prophet_price = forecast.iloc[-1]["yhat"]
-        st.success(f"🔮 Prophet Forecast: ₹{round(prophet_price, 2)}")
-
-
-    e    elif strategy_code == "MC":
-        st.info("⚖️ Comparing predictions from multiple ML models...")
-
-        future_index = df["day_index"].max() + days_ahead
-
-        # Linear
-        model_lin = LinearRegression().fit(X, y)
-        pred_lin = model_lin.predict([[future_index]])[0]
-
-        # Polynomial
-        model_poly = LinearRegression().fit(X_poly, y)
-        pred_poly = model_poly.predict(poly.transform([[future_index]]))[0]
-
-        # Random Forest
-        rf_key = model_cache_key(symbol, "RF", days_ahead)
-        if os.path.exists(rf_key):
-            rf_model = joblib.load(rf_key)
-        else:
-            rf_model = RandomForestRegressor(n_estimators=100)
-            rf_model.fit(X, y)
-            joblib.dump(rf_model, rf_key)
-        pred_rf = rf_model.predict([[future_index]])[0]
-
-        # XGBoost
-        xgb_key = model_cache_key(symbol, "XGB", days_ahead)
-        if os.path.exists(xgb_key):
-            xgb_model = joblib.load(xgb_key)
-        else:
-            xgb_model = xgb.XGBRegressor()
-            xgb_model.fit(X, y)
-            joblib.dump(xgb_model, xgb_key)
-        pred_xgb = xgb_model.predict([[future_index]])[0]
-
-        # Prophet
-        prophet_key = model_cache_key(symbol, "PROPHET", days_ahead)
-        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
-        if os.path.exists(prophet_key):
-            prophet_model = joblib.load(prophet_key)
-        else:
-            prophet_model = Prophet()
-            prophet_model.fit(prophet_df)
-            joblib.dump(prophet_model, prophet_key)
-        future = prophet_model.make_future_dataframe(periods=days_ahead)
-        forecast = prophet_model.predict(future)
-        pred_prophet = forecast.iloc[-1]["yhat"]
-
-        predictions = {
-            "Linear": pred_lin,
-            "Polynomial": pred_poly,
-            "Random Forest": pred_rf,
-            "XGBoost": pred_xgb,
-            "Prophet": pred_prophet
-        }
-
-        df_preds = pd.DataFrame(predictions.items(), columns=["Model", "Prediction"])
-        st.dataframe(df_preds)
-        st.bar_chart(df_preds.set_index("Model"))
-from sklearn.metrics import r2_score
-
-# After predicting all models
-r2_scores = {
-    "Linear": r2_score(y, model_lin.predict(X)),
-    "Polynomial": r2_score(y, model_poly.predict(X_poly)),
-    "Random Forest": r2_score(y, rf_model.predict(X)),
-    "XGBoost": r2_score(y, xgb_model.predict(X)),
-    "Prophet": r2_score(y, preds["Prophet"])  # from MD block
-}
-
-st.subheader("📊 R² Scores")
-for model, score in r2_scores.items():
-    st.write(f"{model}: {round(score, 4)}")
-# Forecast X values beyond existing
-future_days = 30  # can be slider-controlled
-X_future = np.array([[i] for i in range(df["day_index"].max() + 1, df["day_index"].max() + future_days + 1)])
-dates_future = pd.date_range(start=df["date"].max(), periods=future_days + 1, freq="D")[1:]
-
-# Polynomial Model Example
-y_poly_future = model_poly.predict(poly.transform(X_future))
-
-fig, ax = plt.subplots()
-ax.plot(df["date"], y, label="Actual")
-ax.plot(dates_future, y_poly_future, label="Forecast", linestyle="--")
-ax.set_title(f"📈 30-Day Forecast with Polynomial")
-ax.legend()
-st.pyplot(fig)
-model_select = st.selectbox("Choose model to plot:", ["Polynomial", "Random Forest", "XGBoost", "Prophet"])
-model_preds = {
-    "Polynomial": model_poly.predict(X_poly),
-    "Random Forest": rf_model.predict(X),
-    "XGBoost": xgb_model.predict(X),
-    "Prophet": preds["Prophet"]  # as defined earlier
-}
-
-fig, ax = plt.subplots()
-ax.plot(df["date"], y, label="Actual")
-ax.plot(df["date"], model_preds[model_select], label=model_select)
-ax.legend()
-st.pyplot(fig)
-
-
-
-        elif strategy_code == "MD":
-        st.info("🧐 Plotting Actual vs Predicted values for ML models...")
-
-        # Actual timeline
-        dates = df["date"]
-        preds = {}
-
-        # Polynomial
-        model_poly = LinearRegression().fit(X_poly, y)
-        preds["Polynomial"] = model_poly.predict(X_poly)
-
-        # Random Forest
         rf_model = RandomForestRegressor(n_estimators=100).fit(X, y)
-        preds["Random Forest"] = rf_model.predict(X)
+        st.success(f"🌲 Random Forest: ₹{round(rf_model.predict([[X[-1][0] + days_ahead]])[0], 2)}")
 
-        # XGBoost
         xgb_model = xgb.XGBRegressor().fit(X, y)
-        preds["XGBoost"] = xgb_model.predict(X)
+        st.success(f"🚀 XGBoost: ₹{round(xgb_model.predict([[X[-1][0] + days_ahead]])[0], 2)}")
 
-        # Prophet
         prophet_df = df.rename(columns={"date": "ds", "price": "y"})
         prophet_model = Prophet().fit(prophet_df)
-        future = prophet_model.make_future_dataframe(periods=0)
+        future = prophet_model.make_future_dataframe(periods=days_ahead)
         forecast = prophet_model.predict(future)
-        preds["Prophet"] = forecast["yhat"].values
+        st.success(f"🔮 Prophet: ₹{round(forecast.iloc[-1]['yhat'], 2)}")
 
-        # Plot all
-        fig, ax = plt.subplots()
-        ax.plot(dates, y, label="Actual", linewidth=2)
-        for model_name, yhat in preds.items():
-            ax.plot(dates, yhat, label=model_name)
-        ax.legend()
-        ax.set_title("Actual vs Predicted")
-        st.pyplot(fig)
+    elif strategy_code == "MC":
+        model_lin = LinearRegression().fit(X, y)
+        model_poly = LinearRegression().fit(X_poly, y)
+        rf_model = RandomForestRegressor(n_estimators=100).fit(X, y)
+        xgb_model = xgb.XGBRegressor().fit(X, y)
+        prophet_df = df.rename(columns={"date": "ds", "price": "y"})
+        prophet_model = Prophet().fit(prophet_df)
+        future = prophet_model.make_future_dataframe(periods=days_ahead)
+        forecast = prophet_model.predict(future)
 
-        # Residual summary
-        st.subheader("Residual Std Dev (Prediction Error):")
-        for name, yhat in preds.items():
-            error = np.std(y - yhat)
-            st.write(f"{name}: ±₹{round(error, 2)}")
-            # Forecast X values beyond existing
-future_days = 30  # can be slider-controlled
-X_future = np.array([[i] for i in range(df["day_index"].max() + 1, df["day_index"].max() + future_days + 1)])
-dates_future = pd.date_range(start=df["date"].max(), periods=future_days + 1, freq="D")[1:]
+        predictions = {
+            "Linear": model_lin.predict([[X[-1][0] + days_ahead]])[0],
+            "Polynomial": model_poly.predict(poly.transform([[X[-1][0] + days_ahead]]))[0],
+            "Random Forest": rf_model.predict([[X[-1][0] + days_ahead]])[0],
+            "XGBoost": xgb_model.predict([[X[-1][0] + days_ahead]])[0],
+            "Prophet": forecast.iloc[-1]["yhat"]
+        }
 
-# Polynomial Model Example
-y_poly_future = model_poly.predict(poly.transform(X_future))
+        st.dataframe(pd.DataFrame(predictions.items(), columns=["Model", "Prediction"]))
+        st.bar_chart(pd.DataFrame(predictions.values(), index=predictions.keys(), columns=["Prediction"]))
 
-fig, ax = plt.subplots()
-ax.plot(df["date"], y, label="Actual")
-ax.plot(dates_future, y_poly_future, label="Forecast", linestyle="--")
-ax.set_title(f"📈 30-Day Forecast with Polynomial")
-ax.legend()
-st.pyplot(fig)
+        if show_r2:
+            r2s = {
+                "Linear": r2_score(y, model_lin.predict(X)),
+                "Polynomial": r2_score(y, model_poly.predict(X_poly)),
+                "Random Forest": r2_score(y, rf_model.predict(X)),
+                "XGBoost": r2_score(y, xgb_model.predict(X)),
+                "Prophet": r2_score(y, forecast["yhat"][:len(y)])
+            }
+            st.subheader("📊 R² Scores")
+            for model, score in r2s.items():
+                st.write(f"{model}: {round(score, 4)}")
 
+        if plot_future:
+            future_days = 30
+            X_future = np.array([[i] for i in range(X[-1][0] + 1, X[-1][0] + future_days + 1)])
+            dates_future = pd.date_range(start=df["date"].max(), periods=future_days + 1, freq="D")[1:]
+            y_poly_future = model_poly.predict(poly.transform(X_future))
 
+            fig, ax = plt.subplots()
+            ax.plot(df["date"], y, label="Actual")
+            ax.plot(dates_future, y_poly_future, label="Polynomial Forecast", linestyle="--")
+            ax.legend()
+            st.pyplot(fig)
 
-    elif strategy_code == "ME":
-        model = LinearRegression().fit(X_poly, y)
-        pred = model.predict(X_poly)
-        std_dev = np.std(y - pred)
-        st.warning(f"❓ ML Std Deviation: {round(std_dev, 2)} | Risk of overfitting if degree too high")
-
-    elif strategy_code == "TI":
-        df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-        macd = ta.trend.MACD(df["price"])
-        df["MACD"] = macd.macd()
-        df["Signal"] = macd.macd_signal()
-        bb = ta.volatility.BollingerBands(df["price"])
-        df["BB_H"] = bb.bollinger_hband()
-        df["BB_L"] = bb.bollinger_lband()
-        st.write(df[["date", "price", "RSI", "MACD", "Signal", "BB_H", "BB_L"]].tail())
-
-    elif strategy_code == "TC":
-        df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-        df["EMA20"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
-        st.write(df[["date", "RSI", "EMA20"]].tail())
-
-    elif strategy_code == "TD":
-        st.markdown("""
-        💡 RSI = Overbought/Oversold  
-        💡 MACD = Momentum shift  
-        💡 BB = Volatility breakouts  
-        """)
-
-    elif strategy_code == "TE":
-        st.warning("⚠️ Technical indicators may lag. Combine with sentiment and fundamentals.")
-
-    elif strategy_code in ["SA", "SC", "SD", "SE"]:
-        base_pred, _, _ = predict_price(df, days_ahead)
-        multiplier = {"SA": 1.10, "SC": 1.02, "SD": 0.95, "SE": 0.80}[strategy_code]
-        pred_price = base_pred * multiplier
-        st.success(f"{strategy_code} adjusted forecast: ₹{round(pred_price, 2)}")
+    # Other strategies like "S", "D", "TI", etc. remain the same...
 
     # Chart
     fig, ax = plt.subplots()
@@ -432,6 +241,3 @@ if st.button("Run Strategy"):
             st.error("No data found.")
         else:
             analyze_and_predict(df, strategy_code, days_ahead, symbol_input.upper())
-            with st.sidebar:
-    show_r2 = st.checkbox("Show R² Scores", value=True)
-    plot_future = st.checkbox("Plot 30-Day Forecast", value=True)
