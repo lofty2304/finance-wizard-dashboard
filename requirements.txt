@@ -9,3 +9,6 @@ openai
 finnhub-python
 ta  # 
 streamlit-autorefresh
+xgboost
+prophet
+joblib
