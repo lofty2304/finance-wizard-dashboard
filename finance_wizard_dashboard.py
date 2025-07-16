@@ -1,4 +1,4 @@
-# --- Integrated Finance Wizard Master File (Part 1/2) ---
+# --- Finance Wizard: Final Integrated Master Code (All Fixes Applied) ---
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
@@ -9,7 +9,7 @@ from sklearn.preprocessing import PolynomialFeatures, MinMaxScaler
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
 from prophet import Prophet
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, mean_squared_error
 import ta
 import yfinance as yf
 import openai
@@ -117,53 +117,47 @@ def get_stock_price(symbol, fallback_nav):
         return df
     return None
 
-def get_sentiment_score(text):
-    try:
-        res = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "Score financial sentiment from -1 to 1."},
-                      {"role": "user", "content": text}]
-        )
-        return float(res["choices"][0]["message"]["content"].strip())
-    except: return 0
+# --- Strategy Functions ---
+def linear_forecast(df, days_ahead):
+    model = LinearRegression()
+    model.fit(df[["day_index"]], df["price"])
+    future_days = np.arange(df["day_index"].max() + 1, df["day_index"].max() + days_ahead + 1).reshape(-1, 1)
+    pred = model.predict(future_days)
+    return pred.tolist(), model.score(df[["day_index"]], df["price"])
 
-def fetch_news_sentiment(symbol):
-    try:
-        url = "https://newsapi.org/v2/everything"
-        res = requests.get(url, params={
-            "q": symbol, "language": "en", "sortBy": "publishedAt",
-            "apiKey": st.secrets["NEWS_API_KEY"]
-        }).json()
-        articles = res.get("articles", [])[:5]
-        texts = [a["title"] + " " + a.get("description", "") for a in articles]
-        scores = [get_sentiment_score(txt) for txt in texts]
-        return round(np.mean(scores), 2) if scores else 0
-    except: return 0
+def polynomial_forecast(df, days_ahead, degree=3):
+    poly = PolynomialFeatures(degree=degree)
+    X_poly = poly.fit_transform(df[["day_index"]])
+    model = LinearRegression()
+    model.fit(X_poly, df["price"])
+    future_days = np.arange(df["day_index"].max() + 1, df["day_index"].max() + days_ahead + 1).reshape(-1, 1)
+    pred = model.predict(poly.transform(future_days))
+    return pred.tolist(), model.score(X_poly, df["price"])
 
-# --- LSTM Model ---
-def lstm_forecast(df, days_ahead):
-    data = df["price"].values.reshape(-1, 1)
-    scaler = MinMaxScaler()
-    data_scaled = scaler.fit_transform(data)
+def random_forest_forecast(df, days_ahead):
+    model = RandomForestRegressor(n_estimators=100)
+    model.fit(df[["day_index"]], df["price"])
+    future_days = np.arange(df["day_index"].max() + 1, df["day_index"].max() + days_ahead + 1).reshape(-1, 1)
+    pred = model.predict(future_days)
+    return pred.tolist(), model.score(df[["day_index"]], df["price"])
 
-    X, y = [], []
-    for i in range(60, len(data_scaled) - days_ahead):
-        X.append(data_scaled[i-60:i])
-        y.append(data_scaled[i + days_ahead - 1])
-    X, y = np.array(X), np.array(y)
+def xgboost_forecast(df, days_ahead):
+    model = xgb.XGBRegressor()
+    model.fit(df[["day_index"]], df["price"])
+    future_days = np.arange(df["day_index"].max() + 1, df["day_index"].max() + days_ahead + 1).reshape(-1, 1)
+    pred = model.predict(future_days)
+    return pred.tolist(), model.score(df[["day_index"]], df["price"])
 
-    model = Sequential()
-    model.add(LSTM(50, activation='relu', return_sequences=False, input_shape=(60, 1)))
-    model.add(Dense(1))
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(X, y, epochs=10, batch_size=16, verbose=0)
+def prophet_forecast(df, days_ahead):
+    df_p = df[["date", "price"]].rename(columns={"date": "ds", "price": "y"})
+    model = Prophet()
+    model.fit(df_p)
+    future = model.make_future_dataframe(periods=days_ahead)
+    forecast = model.predict(future)
+    future_data = forecast.tail(days_ahead)["yhat"].values.tolist()
+    return future_data, model
 
-    test_input = data_scaled[-60:].reshape(1, 60, 1)
-    pred_scaled = model.predict(test_input)
-    pred = scaler.inverse_transform(pred_scaled)[0][0]
-    return round(pred, 2)
-
-# --- SIP Return Logic ---
+# --- SIP Logic ---
 def run_sip_backtest(df):
     sip_amount = 1000
     dates = df["date"]
@@ -173,109 +167,152 @@ def run_sip_backtest(df):
     value = sum(units) * final_price
     return round(invested, 2), round(value, 2), round((value - invested) / invested * 100, 2)
 
-# --- Strategy Execution ---
+# --- Plot ---
+def plot_main_graph(df, forecast=None, title="Forecast"):
+    fig, ax = plt.subplots()
+    ax.plot(df["date"], df["price"], label="Historical Price")
+    if "MA5" in df.columns:
+        ax.plot(df["date"], df["MA5"], label="MA5")
+    if forecast is not None:
+        last_date = df["date"].iloc[-1]
+        future_dates = [last_date + timedelta(days=i+1) for i in range(len(forecast))]
+        ax.plot(future_dates, forecast, label=title, linestyle="--")
+    ax.legend(); ax.tick_params(axis="x", rotation=45)
+    st.pyplot(fig)
+
+# --- Run Strategy ---
 def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     df["MA5"] = df["price"].rolling(5).mean()
 
-    def plot_main_graph(extra=None):
-        fig, ax = plt.subplots()
-        ax.plot(df["date"], df["price"], label="Price")
-        ax.plot(df["date"], df["MA5"], label="MA5")
-        if extra is not None:
-            future_dates = [df["date"].iloc[-1] + timedelta(days=i+1) for i in range(len(extra))]
-            ax.plot(future_dates, extra, label="Forecast", linestyle="--")
-        ax.legend(); ax.tick_params(axis="x", rotation=45)
-        st.pyplot(fig)
+    if code == "W":
+        st.subheader("🔮 Predict One Stock (Linear Forecast)")
+        forecast, score = linear_forecast(df, days_ahead)
+        plot_main_graph(df, forecast, "Linear Forecast")
+        st.metric("Forecasted Price", f"₹{round(forecast[-1], 2)}")
+        if show_r2: st.markdown(f"**R² Score:** {round(score, 4)}")
+        st.markdown("This strategy uses a basic linear regression model to estimate future prices. It assumes trend continuity.")
 
-    if code == "DL":
-        st.subheader("🧠 LSTM Forecasting")
+    elif code == "ML":
+        st.subheader("🧠 Polynomial Forecast")
+        forecast, score = polynomial_forecast(df, days_ahead)
+        plot_main_graph(df, forecast, "Polynomial Forecast")
+        st.metric("Forecasted Price", f"₹{round(forecast[-1], 2)}")
+        if show_r2: st.markdown(f"**R² Score:** {round(score, 4)}")
+        st.markdown("Polynomial regression captures non-linear trends. Degree=3 fits curves better than simple linear.")
+
+    elif code == "MC":
+        st.subheader("⚖️ Model Comparison: Linear vs XGBoost vs Random Forest")
+        lin_pred, lin_r2 = linear_forecast(df, days_ahead)
+        xgb_pred, xgb_r2 = xgboost_forecast(df, days_ahead)
+        rf_pred, rf_r2 = random_forest_forecast(df, days_ahead)
+        plot_main_graph(df, xgb_pred, "XGBoost Forecast")
+        st.markdown(f"- Linear R²: {round(lin_r2,4)}\n- XGBoost R²: {round(xgb_r2,4)}\n- RF R²: {round(rf_r2,4)}")
+        st.markdown("This compares 3 ML models to estimate accuracy. Higher R² → better fit to past data.")
+
+    elif code == "D":
+        st.subheader("📉 Downside Risk Estimation")
+        volatility = df["price"].pct_change().std() * 100
+        downside = df["price"].mean() - df["price"].std() * 1.5
+        st.metric("📊 Volatility", f"{round(volatility, 2)}%")
+        st.metric("⚠️ Downside Risk Price", f"₹{round(downside, 2)}")
+        st.markdown("Downside price = Mean - 1.5×Std Dev. High volatility increases risk of large drop.")
+        plot_main_graph(df)
+
+    elif code in ["SA", "SC", "SD", "SE"]:
+        st.subheader("🔁 Scenario Forecasting")
+        map_factor = {"SA": 1.02, "SC": 1.00, "SD": 0.98, "SE": 0.95}
+        label_map = {
+            "SA": "Optimistic Scenario (2% growth/day)",
+            "SC": "Conservative (flat trend)",
+            "SD": "Pessimistic (2% drop/day)",
+            "SE": "Extreme Shock (5% drop/day)"
+        }
+        growth = map_factor[code]
+        forecast = [df["price"].iloc[-1] * (growth ** i) for i in range(days_ahead)]
+        plot_main_graph(df, forecast, label_map[code])
+        st.metric("Scenario Growth Factor", f"{growth}x")
+        st.markdown(f"This is a **{label_map[code]}** assumption-based simulation. Not model-driven but helps stress test possible futures.")
+
+    elif code == "DL":
+        st.subheader("🧠 LSTM Forecasting (Deep Learning)")
         pred = lstm_forecast(df, days_ahead)
-        st.metric("🔮 LSTM Prediction", f"₹{pred}")
-        plot_main_graph()
+        plot_main_graph(df)
+        st.metric("LSTM Predicted Price", f"₹{pred}")
+        st.markdown("LSTM is trained on sequential data (60 days). It's good at capturing short-term temporal patterns.")
 
     elif code == "SIP":
-        st.subheader("💹 SIP Return Analysis")
-        invested, value, return_pct = run_sip_backtest(df)
-        st.metric("📥 Total Invested", f"₹{invested}")
-        st.metric("📈 Final Value", f"₹{value}")
-        st.metric("💰 Return (%)", f"{return_pct}%")
-        plot_main_graph()
-
-    elif code == "BK":
-        st.subheader("📈 Backtest Engine")
-        invested, value, return_pct = run_sip_backtest(df)
-        st.markdown(f"Backtest return on ₹1000 monthly: **₹{value}** from ₹{invested} → **{return_pct}%**")
-        plot_main_graph()
+        st.subheader("💹 SIP Investment Backtest")
+        invested, value, ret = run_sip_backtest(df)
+        plot_main_graph(df)
+        st.metric("Invested", f"₹{invested}"), st.metric("Final Value", f"₹{value}")
+        st.metric("Total Return", f"{ret}%")
+        st.markdown("This simulates investing ₹1000 every period and tracks how it compounds with the market.")
 
     elif code == "PC":
         st.subheader("📊 SIP vs LSTM Comparison")
-        pred = lstm_forecast(df, days_ahead)
+        lstm_pred = lstm_forecast(df, days_ahead)
         invested, value, ret = run_sip_backtest(df)
-        st.metric("SIP Final Value", f"₹{value}")
-        st.metric("LSTM Predicted Price", f"₹{pred}")
-        st.markdown("LSTM is point forecast. SIP is periodic. Use both.")
-
-    elif code in ["SA", "SC", "SD", "SE"]:
-        st.subheader(f"🔁 Scenario Simulation: {code}")
-        scenario_map = {"SA": 1.02, "SC": 1.00, "SD": 0.98, "SE": 0.95}
-        growth = scenario_map.get(code, 1.0)
-        prices = [df["price"].iloc[-1] * (growth ** i) for i in range(days_ahead)]
-        plot_main_graph(extra=prices)
-        st.metric("Scenario Growth Factor", f"{growth}x")
-
-    elif code == "TD":
-        st.subheader("💡 Indicator Explanation")
-        st.markdown("""
-        - **RSI**: Relative Strength Index (momentum, overbought/sold)
-        - **MACD**: Trend strength using two EMAs
-        - **MA5**: Moving Average over 5 days (short trend)
-        """)
-
-    elif code == "TE":
-        st.subheader("⚠️ Indicator Limitations")
-        st.markdown("""
-        - RSI may give false signals in strong trends
-        - MACD lags behind price
-        - MA5 is sensitive to noise
-        """)
-
-    elif code == "MD":
-        st.subheader("🧐 Model Explanation")
-        st.markdown("""
-        - **Linear Regression**: Simple trend line
-        - **Polynomial**: Captures non-linear curves
-        - **Random Forest**: Ensemble of decision trees
-        - **XGBoost**: Gradient boosting model
-        - **Prophet**: Facebook's time series model
-        - **LSTM**: Deep learning for sequential data
-        """)
+        plot_main_graph(df)
+        st.metric("SIP Value", f"₹{value}")
+        st.metric("LSTM Predicted Price", f"₹{lstm_pred}")
+        st.markdown("SIP = periodic investing | LSTM = one-time price prediction.\nCompare stability vs prediction.")
 
     elif code == "TI":
         st.subheader("📉 Technical Indicator Forecast")
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         st.line_chart(df.set_index("date")[["price", "RSI"]])
+        st.markdown("**RSI (Relative Strength Index)** shows momentum. Above 70 = overbought. Below 30 = oversold.")
 
     elif code == "TC":
-        st.subheader("↔️ Compare Indicators")
+        st.subheader("↔️ Compare Technical Indicators")
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         df["MACD"] = ta.trend.MACD(df["price"]).macd()
         st.line_chart(df.set_index("date")[["RSI", "MACD"]])
+        st.markdown("- **MACD** shows trend change.\n- **RSI** shows overbought/oversold behavior.")
+
+    elif code == "TD":
+        st.subheader("💡 Technical Indicator Explanation")
+        st.markdown("""
+        - **RSI**: Measures speed/strength of price movements.
+        - **MACD**: Shows convergence/divergence of two EMAs.
+        - **MA5**: 5-day moving average to smooth short-term noise.
+        """)
+
+    elif code == "TE":
+        st.subheader("⚠️ Indicator Limitations")
+        st.markdown("""
+        - **RSI**: False signals in trending markets.
+        - **MACD**: Lags behind rapid price changes.
+        - **MA5**: Too short. Prone to whipsaws.
+        """)
+
+    elif code == "MD":
+        st.subheader("🧐 Model Explanation")
+        st.markdown("""
+        | Model | Strength | Limitation |
+        |-------|----------|------------|
+        | Linear | Simple, interpretable | Can't handle curves |
+        | Polynomial | Captures curves | Overfitting risk |
+        | Random Forest | Handles noise | Slower |
+        | XGBoost | Very accurate | Needs tuning |
+        | Prophet | Good for seasonality | Complex |
+        | LSTM | Deep learning | Needs data, GPU |
+        """)
 
     elif code == "S":
-        st.subheader("🕵️ Deep Dive")
+        st.subheader("🕵️ Stock Deep Dive")
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         df["MACD"] = ta.trend.MACD(df["price"]).macd()
         df["Signal"] = ta.trend.MACD(df["price"]).macd_signal()
-        score = fetch_news_sentiment(resolved)
-        st.metric("📰 News Sentiment", f"{score}")
         st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "MA5"]].tail())
-        plot_main_graph()
+        plot_main_graph(df)
+        st.markdown("**RSI, MACD, and Signal line** give technical view.\nUse in combination for better decisions.")
 
     else:
         st.warning("⚠️ Strategy not implemented yet or invalid code.")
 
-# --- Main Run Button ---
+# --- Run Button ---
 if st.button("🚀 Run Strategy"):
     nav, nav_source = get_live_nav(resolved)
     df = get_stock_price(resolved, nav)
