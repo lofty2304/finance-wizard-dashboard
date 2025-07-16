@@ -228,7 +228,7 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol, live_nav, nav_sou
         df["BB_L"] = bb.bollinger_lband()
         st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "BB_H", "BB_L"]].tail())
 
-       elif strategy_code == "MC":
+    elif strategy_code == "MC":
         st.markdown("### ⚖️ ML Model Comparison")
         st.markdown("""
         This compares different ML models to estimate future prices.
