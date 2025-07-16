@@ -1,4 +1,4 @@
-# --- Part 1: Initial Setup, NAV, Sentiment, Sidebar, Run Button ---
+# --- Part 1: Initial Setup, NAV, Sentiment, Sidebar, Strategy Function ---
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
@@ -18,14 +18,9 @@ from datetime import datetime, timedelta
 import os
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
-
-# Auto refresh every 10 minutes for sentiment
 st_autorefresh(interval=600000, key="auto_refresh")
-
-# Page config
 st.set_page_config(page_title="Finance Wizard", layout="wide")
 
-# --- Header ---
 st.markdown("""
     <div style="display: flex; align-items: center;">
         <img src="https://i.imgur.com/1N6y4WQ.png" width="80"/>
@@ -37,14 +32,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.caption("🧡 Empowering clients with 22 years of trust and transparency.")
 
-# --- Sidebar ---
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     days_ahead = st.slider("📅 Days Ahead to Forecast", 1, 30, 7)
     show_r2 = st.checkbox("📊 Show R² Scores", value=True)
     st.markdown("Each strategy uses this value to forecast.")
 
-# --- Strategy Select ---
 strategy = st.selectbox("📌 Choose Forecasting Strategy", [
     "🔮 W - Predict One Stock",
     "🧠 ML - Polynomial Forecast",
@@ -62,7 +55,6 @@ strategy = st.selectbox("📌 Choose Forecasting Strategy", [
     "⚖️ SE - Extreme Shock"
 ])
 
-# --- Ticker Input ---
 st.markdown("## 🔎 Enter Stock / Fund Symbol")
 user_input = st.text_input("Ticker / Fund / AMFI Code", "NBCC.NS")
 
@@ -84,7 +76,6 @@ def resolve_ticker(name):
 resolved = resolve_ticker(user_input)
 st.caption(f"🧾 Resolved Ticker: **{resolved}**")
 
-# --- NAV Fetching ---
 @st.cache_data(ttl=300)
 def get_live_nav(ticker):
     try:
@@ -102,7 +93,6 @@ def get_live_nav(ticker):
     except: pass
     return None, "Unavailable"
 
-# --- Historical Prices ---
 def get_stock_price(symbol, fallback_nav):
     try:
         df = yf.Ticker(symbol).history(period="90d")
@@ -117,7 +107,6 @@ def get_stock_price(symbol, fallback_nav):
         return df
     return None
 
-# --- Sentiment Scoring ---
 def get_sentiment_score(text):
     try:
         res = openai.ChatCompletion.create(
@@ -148,7 +137,6 @@ def fetch_news_sentiment(symbol):
     except:
         return 0
 
-# --- Linear Forecast Function ---
 def predict_price_linear(df, days_ahead):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     X = df[["day_index"]].values
@@ -159,30 +147,7 @@ def predict_price_linear(df, days_ahead):
     std = np.std(y - model.predict(X))
     return pred, pred - 1.96 * std, pred + 1.96 * std
 
-# === Execution Button ===
-if st.button("🚀 Run Strategy"):
-    nav, nav_source = get_live_nav(resolved)
-    df = get_stock_price(resolved, nav)
-
-    if df is None or df.empty:
-        st.error("❌ No data found. Try another stock or fund.")
-    else:
-        strategy_code = strategy.split("-")[0].split()[-1].strip()
-        run_strategy(strategy_code, df, days_ahead, nav, nav_source, resolved, show_r2)
-# --- Part 2: Strategy Execution Function ---
-from datetime import timedelta
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import ta
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.ensemble import RandomForestRegressor
-import xgboost as xgb
-from prophet import Prophet
-from sklearn.metrics import r2_score
-import streamlit as st
-
+# --- STRATEGY FUNCTION (MUST COME BEFORE THE BUTTON) ---
 def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     df["MA5"] = df["price"].rolling(5).mean()
@@ -216,7 +181,6 @@ def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
         pred, low, high = predict_price_linear(df, days_ahead)
         st.metric("📊 Predicted Price", f"₹{round(pred, 2)}")
         st.info(f"95% Confidence Interval: ₹{round(low, 2)} – ₹{round(high, 2)}")
-        st.markdown("**Explanation**: Uses a simple linear regression model to project price. Interval shows 95% confidence spread.")
         forecast_line = [pred] * days_ahead
         plot_main_graph(forecast_overlay=forecast_line)
 
@@ -246,7 +210,6 @@ def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
         for name, val in preds.items():
             st.metric(name, f"₹{round(val, 2) if isinstance(val, float) else val}")
 
-        st.markdown("**Explanation**: Polynomial fits curves; Random Forest/XGBoost use ensemble trees; Prophet handles seasonality.")
         if isinstance(prophet_pred, float):
             overlay = forecast_df.iloc[-days_ahead:]["yhat"].values
             plot_main_graph(forecast_overlay=overlay)
@@ -295,7 +258,6 @@ def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
         pred, _, _ = predict_price_linear(df, days_ahead)
         downside = pred - 1.96 * vol * df["price"].iloc[-1]
         st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
-        st.markdown("**Explanation**: Estimates max downside movement based on volatility.")
         plot_main_graph()
 
     elif code == "S":
@@ -318,8 +280,18 @@ def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
             score = 0
         st.metric("🧠 News Sentiment", round(score, 2))
         st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "MA5"]].tail())
-        st.markdown("**Explanation**: RSI shows momentum; MACD detects trend shifts; sentiment from latest news.")
         plot_main_graph()
 
     else:
         st.warning("⚠️ Strategy not implemented yet. Coming soon.")
+
+# === Run Button (now AFTER run_strategy is defined) ===
+if st.button("🚀 Run Strategy"):
+    nav, nav_source = get_live_nav(resolved)
+    df = get_stock_price(resolved, nav)
+
+    if df is None or df.empty:
+        st.error("❌ No data found. Try another stock or fund.")
+    else:
+        strategy_code = strategy.split("-")[0].split()[-1].strip()
+        run_strategy(strategy_code, df, days_ahead, nav, nav_source, resolved, show_r2)
