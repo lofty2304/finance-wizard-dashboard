@@ -156,6 +156,28 @@ def prophet_forecast(df, days_ahead):
     forecast = model.predict(future)
     future_data = forecast.tail(days_ahead)["yhat"].values.tolist()
     return future_data, model
+# --- LSTM Model ---
+def lstm_forecast(df, days_ahead):
+    data = df["price"].values.reshape(-1, 1)
+    scaler = MinMaxScaler()
+    data_scaled = scaler.fit_transform(data)
+
+    X, y = [], []
+    for i in range(60, len(data_scaled) - days_ahead):
+        X.append(data_scaled[i-60:i])
+        y.append(data_scaled[i + days_ahead - 1])
+    X, y = np.array(X), np.array(y)
+
+    model = Sequential()
+    model.add(LSTM(50, activation='relu', return_sequences=False, input_shape=(60, 1)))
+    model.add(Dense(1))
+    model.compile(optimizer='adam', loss='mse')
+    model.fit(X, y, epochs=10, batch_size=16, verbose=0)
+
+    test_input = data_scaled[-60:].reshape(1, 60, 1)
+    pred_scaled = model.predict(test_input)
+    pred = scaler.inverse_transform(pred_scaled)[0][0]
+    return round(pred, 2)
 
 # --- SIP Logic ---
 def run_sip_backtest(df):
@@ -242,12 +264,25 @@ def run_strategy(code, df, days_ahead, nav, nav_source, resolved, show_r2=True):
         st.markdown("LSTM is trained on sequential data (60 days). It's good at capturing short-term temporal patterns.")
 
     elif code == "SIP":
-        st.subheader("💹 SIP Investment Backtest")
-        invested, value, ret = run_sip_backtest(df)
+    
+        st.subheader("💹 SIP Investment Simulator")
+        sip_input = st.number_input("Monthly SIP Amount (₹)", min_value=100, value=1000, step=100)
+        invested = len(df) * sip_input
+        units = [sip_input / p if p else 0 for p in df["price"]]
+        total_units = sum(units)
+        final_value = total_units * df["price"].iloc[-1]
+        ret = round((final_value - invested) / invested * 100, 2)
+
+        st.metric("Invested", f"₹{invested}")
+        st.metric("Value", f"₹{round(final_value, 2)}")
+        st.metric("Return (%)", f"{ret}%")
         plot_main_graph(df)
-        st.metric("Invested", f"₹{invested}"), st.metric("Final Value", f"₹{value}")
-        st.metric("Total Return", f"{ret}%")
-        st.markdown("This simulates investing ₹1000 every period and tracks how it compounds with the market.")
+        st.markdown("""
+        **Formula**: Units Bought = SIP Amount / Price at time  
+        Final Value = Sum of Units × Final Price  
+        Return % = (Final Value - Invested) / Invested × 100
+        """)
+
 
     elif code == "PC":
         st.subheader("📊 SIP vs LSTM Comparison")
