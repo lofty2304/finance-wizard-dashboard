@@ -168,7 +168,6 @@ if st.button("🚀 Run Strategy"):
         st.error("❌ No data found. Try another stock or fund.")
     else:
         strategy_code = strategy.split("-")[0].split()[-1].strip()
-        from finance_wizard_part2 import run_strategy
         run_strategy(strategy_code, df, days_ahead, nav, nav_source, resolved, show_r2)
 # --- Part 2: Strategy Execution Function ---
 from datetime import timedelta
