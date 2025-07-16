@@ -17,6 +17,23 @@ import requests
 import openai
 import finnhub
 import ta
+# --- News Sentiment Score via OpenAI ---
+def fetch_news_sentiment(symbol):
+    try:
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q": symbol,
+            "language": "en",
+            "sortBy": "publishedAt",
+            "apiKey": st.secrets["NEWS_API_KEY"]
+        }
+        res = requests.get(url, params=params).json()
+        articles = res.get("articles", [])[:5]
+        texts = [a["title"] + " " + a.get("description", "") for a in articles]
+        scores = [get_sentiment_score(txt) for txt in texts]
+        return round(np.mean(scores), 2) if scores else 0
+    except:
+        return 0
 
 # --- API KEYS ---
 openai.api_key = st.secrets["OPENAI_API_KEY"]
