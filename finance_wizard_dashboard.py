@@ -12,38 +12,40 @@ from sklearn.metrics import r2_score
 import ta
 import yfinance as yf
 import openai
-import finnhub
 import requests
+from datetime import datetime, timedelta
 import os
-from datetime import datetime
 
-# --- API Keys ---
+# === API KEYS ===
 openai.api_key = st.secrets["OPENAI_API_KEY"]
-finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
 
-# --- Auto-refresh sentiment every 10 minutes ---
-st_autorefresh(interval=600000, key="auto_refresh")  # 10 minutes
+# === AUTO-REFRESH SENTIMENT EVERY 10 MINUTES ===
+st_autorefresh(interval=600000, key="auto_refresh")
 
-# --- Page Config ---
-st.set_page_config(page_title="Finance Wizard", layout="centered")
+# === PAGE CONFIG ===
+st.set_page_config(page_title="Finance Wizard", layout="wide")
 
-# --- Header ---
-col1, col2 = st.columns([1, 5])
-with col1:
-    st.image("wizard_couple.png.JPG", width=100)
-with col2:
-    st.markdown("# 🧙 Finance Wizard Lucia")
-    st.markdown("**AI-driven market intelligence, forecasts & NAV sync**")
-st.caption("🧡 22 years of love, trust & analysis.")
+# === HEADER ===
+st.markdown("""
+    <div style="display: flex; align-items: center;">
+        <img src="https://i.imgur.com/1N6y4WQ.png" width="80"/>
+        <div style="margin-left: 10px;">
+            <h1 style="margin: 0;">🧙 Finance Wizard Lucia</h1>
+            <p style="margin: 0;">AI-Powered Forecasts, NAV Insights & Global Sentiment</p>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
+st.caption("🧡 Empowering clients with 22 years of trust and transparency.")
 
-# --- Sidebar options ---
+# === SIDEBAR CONFIG ===
 with st.sidebar:
-    show_r2 = st.checkbox("Show R² Scores", value=True)
-    st.markdown("📅 Forecast Horizon (Days):")
-    days_ahead = st.slider("Days", 1, 30, 7)
+    st.markdown("### ⚙️ Settings")
+    days_ahead = st.slider("📅 Days Ahead to Forecast", 1, 30, 7)
+    show_r2 = st.checkbox("📊 Show R² Scores", value=True)
+    st.markdown("Each strategy will use this value to forecast into the future.")
 
-# --- Strategy Dropdown ---
-strategy = st.selectbox("Choose Strategy", [
+# === STRATEGY SELECTOR ===
+strategy = st.selectbox("📌 Choose Forecasting Strategy", [
     "🔮 W - Predict One Stock",
     "🧠 ML - Polynomial Forecast",
     "⚖️ MC - ML Model Comparison",
@@ -60,11 +62,11 @@ strategy = st.selectbox("Choose Strategy", [
     "⚖️ SE - Extreme Shock"
 ])
 
-# --- Ticker input ---
-st.markdown("### 🔎 Enter Fund or Stock Symbol")
+# === TICKER INPUT ===
+st.markdown("## 🔎 Enter Stock / Fund Symbol")
 user_input = st.text_input("Ticker / Fund / AMFI Code", "NBCC.NS")
 
-# --- Ticker Resolver (using OpenAI if ambiguous) ---
+# === RESOLVE TICKER ===
 def resolve_ticker(name):
     if "." in name and len(name) < 10:
         return name.upper()
@@ -81,9 +83,9 @@ def resolve_ticker(name):
         return name.upper()
 
 resolved = resolve_ticker(user_input)
-st.caption(f"Resolved Ticker: **{resolved}**")
+st.caption(f"🧾 Resolved Ticker: **{resolved}**")
 
-# --- Get live NAV ---
+# === LIVE NAV FETCHER ===
 @st.cache_data(ttl=300)
 def get_live_nav(ticker):
     try:
@@ -101,7 +103,7 @@ def get_live_nav(ticker):
     except: pass
     return None, "Unavailable"
 
-# --- Get 90-day price data ---
+# === 90-DAY HISTORICAL PRICES ===
 def get_stock_price(symbol, fallback_nav):
     try:
         df = yf.Ticker(symbol).history(period="90d")
@@ -115,18 +117,8 @@ def get_stock_price(symbol, fallback_nav):
         df = pd.DataFrame({"date": dates, "price": [fallback_nav] * 90})
         return df
     return None
-# --- Forecast helper ---
-def predict_price(df, days_ahead):
-    df["day_index"] = (df["date"] - df["date"].min()).dt.days
-    X = df[["day_index"]].values
-    y = df["price"].values
-    model = LinearRegression().fit(X, y)
-    future_index = X[-1][0] + days_ahead
-    pred = model.predict([[future_index]])[0]
-    std = np.std(y - model.predict(X))
-    return pred, pred - 1.96 * std, pred + 1.96 * std
 
-# --- Sentiment score via OpenAI ---
+# === SENTIMENT FETCHER ===
 def get_sentiment_score(text):
     try:
         res = openai.ChatCompletion.create(
@@ -157,151 +149,161 @@ def fetch_news_sentiment(symbol):
     except:
         return 0
 
-# --- Main Logic Handler ---
-def run_strategy(strategy_code, df, days_ahead, nav, source):
+# === FORECAST HELPER (used by strategy handlers) ===
+def predict_price(df, days_ahead):
+    df["day_index"] = (df["date"] - df["date"].min()).dt.days
+    X = df[["day_index"]].values
+    y = df["price"].values
+    model = LinearRegression().fit(X, y)
+    future_index = X[-1][0] + days_ahead
+    pred = model.predict([[future_index]])[0]
+    std = np.std(y - model.predict(X))
+    return pred, pred - 1.96 * std, pred + 1.96 * std
+# --- Strategy Execution Logic ---
+def run_strategy(code, df, days_ahead, nav, nav_source):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     df["MA5"] = df["price"].rolling(5).mean()
     df["Live_NAV"] = nav
 
-    st.caption(f"📊 Live NAV Source: {source}")
+    start_dt = df["date"].min().strftime("%d-%m-%Y")
+    end_dt = df["date"].max().strftime("%d-%m-%Y")
+    forecast_dt = (df["date"].max() + timedelta(days=days_ahead)).strftime("%d-%m-%Y")
 
+    st.caption(f"📆 Data range: {start_dt} to {end_dt} | Forecast till: {forecast_dt}")
+    st.caption(f"📈 Live NAV (Source: {nav_source}) → ₹{nav if nav else 'N/A'}")
+
+    # Base features
     X = df[["day_index"]].values
     y = df["price"].values
     poly = PolynomialFeatures(degree=3)
     X_poly = poly.fit_transform(X)
 
-    if strategy_code == "W":
-        pred, low, high = predict_price(df, days_ahead)
-        st.metric("Forecast Price", f"₹{round(pred, 2)}")
-        st.info(f"95% Confidence Interval: ₹{round(low)} – ₹{round(high)}")
+    # Shared chart
+    def plot_main_graph(forecast_overlay=None):
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(df["date"], df["price"], label="Price", linewidth=2)
+        ax.plot(df["date"], df["MA5"], label="MA5 (5-day moving avg)", linestyle="--")
+        if forecast_overlay:
+            future_x = df["day_index"].iloc[-1] + np.arange(1, days_ahead + 1)
+            future_dates = [df["date"].iloc[-1] + timedelta(days=i) for i in range(1, days_ahead + 1)]
+            ax.plot(future_dates, forecast_overlay, label="Forecast", linestyle=":", color="orange")
+        ax.legend()
+        ax.tick_params(axis="x", rotation=45)
+        st.pyplot(fig)
 
-    elif strategy_code == "ML":
-        model_poly = LinearRegression().fit(X_poly, y)
-        rf = RandomForestRegressor().fit(X, y)
-        xgb_model = xgb.XGBRegressor().fit(X, y)
+    if code == "W":
+        st.subheader("🔮 Forecast: One Stock")
+        pred, low, high = predict_price_linear(df, days_ahead)
+        st.metric("📊 Predicted Price", f"₹{round(pred, 2)}")
+        st.info(f"95% Confidence Interval: ₹{round(low, 2)} – ₹{round(high, 2)}")
+        st.markdown("**Explanation**: This uses a simple linear model to forecast the next closing price. The 95% confidence interval shows potential price spread.")
+        if plot_future:
+            forecast_line = [pred] * days_ahead
+            plot_main_graph(forecast_overlay=forecast_line)
+        else:
+            plot_main_graph()
 
-        try:
-            df_p = df.rename(columns={"date": "ds", "price": "y"})
-            prophet = Prophet().fit(df_p)
-            future = prophet.make_future_dataframe(periods=days_ahead)
-            forecast = prophet.predict(future)
-            yhat = round(forecast.iloc[-1]["yhat"], 2)
-        except:
-            yhat = "N/A"
-
-        st.metric("Polynomial", round(model_poly.predict(poly.transform([[X[-1][0] + days_ahead]]))[0], 2))
-        st.metric("Random Forest", round(rf.predict([[X[-1][0] + days_ahead]])[0], 2))
-        st.metric("XGBoost", round(xgb_model.predict([[X[-1][0] + days_ahead]])[0], 2))
-        st.metric("Prophet", yhat)
-
-    elif strategy_code == "MC":
-        st.subheader("📈 Model Comparison (ML vs Prophet)")
-
-        lin = LinearRegression().fit(X, y)
+    elif code == "ML":
+        st.subheader("🧠 Machine Learning Forecasts")
         poly_model = LinearRegression().fit(X_poly, y)
-        rf = RandomForestRegressor().fit(X, y)
-        xgb_model = xgb.XGBRegressor().fit(X, y)
+        rf = RandomForestRegressor(n_estimators=100).fit(X, y)
+        xgb_model = xgb.XGBRegressor(n_estimators=100).fit(X, y)
 
+        # Prophet setup
         try:
-            prop_df = df.rename(columns={"date": "ds", "price": "y"})
-            prop = Prophet().fit(prop_df)
-            forecast = prop.predict(prop.make_future_dataframe(periods=days_ahead))
-            r2_prophet = r2_score(y, forecast["yhat"][:len(y)])
-            pred_prophet = forecast.iloc[-1]["yhat"]
-        except:
-            r2_prophet = None
-            pred_prophet = "N/A"
+            df_prophet = df.rename(columns={"date": "ds", "price": "y"})
+            prophet = Prophet().fit(df_prophet)
+            future_df = prophet.make_future_dataframe(periods=days_ahead)
+            forecast_df = prophet.predict(future_df)
+            prophet_pred = forecast_df.iloc[-1]["yhat"]
+        except Exception as e:
+            prophet_pred = "N/A"
 
         preds = {
-            "Linear": lin.predict([[X[-1][0] + days_ahead]])[0],
             "Polynomial": poly_model.predict(poly.transform([[X[-1][0] + days_ahead]]))[0],
             "Random Forest": rf.predict([[X[-1][0] + days_ahead]])[0],
             "XGBoost": xgb_model.predict([[X[-1][0] + days_ahead]])[0],
-            "Prophet": pred_prophet
+            "Prophet": prophet_pred
         }
 
-        st.dataframe(pd.DataFrame(preds.items(), columns=["Model", "Prediction"]))
+        for name, val in preds.items():
+            st.metric(name, f"₹{round(val, 2) if isinstance(val, float) else val}")
+
+        st.markdown("**Explanation**: Each ML model has its own way of fitting trends. Polynomial fits curve-based logic, Random Forest/XGBoost use decision trees, and Prophet uses seasonality and trends.")
+
+        if plot_future and isinstance(prophet_pred, float):
+            overlay = forecast_df.iloc[-days_ahead:]["yhat"].values
+            plot_main_graph(forecast_overlay=overlay)
+        else:
+            plot_main_graph()
+
+    elif code == "MC":
+        st.subheader("⚖️ Model Comparison")
+        models = {
+            "Linear": LinearRegression().fit(X, y),
+            "Polynomial": LinearRegression().fit(X_poly, y),
+            "Random Forest": RandomForestRegressor().fit(X, y),
+            "XGBoost": xgb.XGBRegressor().fit(X, y)
+        }
+
+        df_prophet = df.rename(columns={"date": "ds", "price": "y"})
+        try:
+            prophet = Prophet().fit(df_prophet)
+            future = prophet.make_future_dataframe(periods=days_ahead)
+            forecast = prophet.predict(future)
+            prophet_r2 = r2_score(y, forecast["yhat"][:len(y)])
+            prophet_forecast = forecast.iloc[-1]["yhat"]
+        except:
+            prophet_r2 = None
+            prophet_forecast = "N/A"
+
+        preds = {k: model.predict(poly.transform([[X[-1][0] + days_ahead]]) if "Poly" in k else [[X[-1][0] + days_ahead]])[0] for k, model in models.items()}
+        preds["Prophet"] = prophet_forecast
+
+        st.dataframe(pd.DataFrame(preds.items(), columns=["Model", "Prediction (₹)"]))
 
         if show_r2:
-            r2s = {
-                "Linear": r2_score(y, lin.predict(X)),
-                "Polynomial": r2_score(y, poly_model.predict(X_poly)),
-                "Random Forest": r2_score(y, rf.predict(X)),
-                "XGBoost": r2_score(y, xgb_model.predict(X)),
-                "Prophet": r2_prophet
-            }
-            st.subheader("📊 R² Scores")
-            for k, v in r2s.items():
-                if v is not None:
-                    st.write(f"{k}: {round(v, 4)}")
+            st.markdown("### 📈 R² Score")
+            r2_vals = {k: r2_score(y, model.predict(X_poly if "Poly" in k else X)) for k, model in models.items()}
+            r2_vals["Prophet"] = prophet_r2
+            st.write(pd.DataFrame(r2_vals.items(), columns=["Model", "R²"]))
 
-        fig, ax = plt.subplots()
-        ax.plot(df["date"], y, label="Actual")
-        ax.plot(df["date"], lin.predict(X), label="Linear")
-        ax.plot(df["date"], poly_model.predict(X_poly), label="Polynomial")
-        ax.plot(df["date"], rf.predict(X), label="Random Forest")
-        ax.plot(df["date"], xgb_model.predict(X), label="XGBoost")
-        if r2_prophet is not None:
-            ax.plot(df["date"], forecast["yhat"][:len(y)], label="Prophet")
-        ax.legend()
-        ax.tick_params(axis="x", rotation=45)
-        st.pyplot(fig)
+        st.markdown("**Explanation**: Higher R² = better fit. This table compares accuracy and predicted value across models.")
+        plot_main_graph()
 
-    elif strategy_code == "MD":
-        st.subheader("📘 Model Explanation")
-        st.markdown("R² score and residual standard deviation help evaluate model fit.")
-        model_poly = LinearRegression().fit(X_poly, y)
-        rf = RandomForestRegressor().fit(X, y)
-        xgb_model = xgb.XGBRegressor().fit(X, y)
-
-        try:
-            df_prop = df.rename(columns={"date": "ds", "price": "y"})
-            prop = Prophet().fit(df_prop)
-            forecast = prop.predict(prop.make_future_dataframe(periods=0))
-            yhat_prophet = forecast["yhat"]
-        except:
-            yhat_prophet = None
-
-        fig, ax = plt.subplots()
-        ax.plot(df["date"], y, label="Actual", linewidth=2)
-        ax.plot(df["date"], model_poly.predict(X_poly), label="Polynomial")
-        ax.plot(df["date"], rf.predict(X), label="Random Forest")
-        ax.plot(df["date"], xgb_model.predict(X), label="XGBoost")
-        if yhat_prophet is not None:
-            ax.plot(df["date"], yhat_prophet[:len(y)], label="Prophet")
-        ax.legend()
-        ax.tick_params(axis="x", rotation=45)
-        st.pyplot(fig)
-
-    elif strategy_code == "D":
+    elif code == "D":
+        st.subheader("📉 Downside Risk")
         returns = df["price"].pct_change().dropna()
         vol = np.std(returns)
-        pred, _, _ = predict_price(df, days_ahead)
+        pred, _, _ = predict_price_linear(df, days_ahead)
         downside = pred - 1.96 * vol * df["price"].iloc[-1]
-        st.warning(f"📉 Downside Risk: ₹{round(downside, 2)} | Volatility: {round(vol*100, 2)}%")
+        st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
+        st.markdown("**Explanation**: Downside = projected dip based on current volatility. NAV mismatch may occur if prices are illiquid or lagging.")
+        plot_main_graph()
 
-    elif strategy_code == "S":
+    elif code == "S":
+        st.subheader("🕵️ Deep Stock Dive")
         df["RSI"] = ta.momentum.RSIIndicator(df["price"]).rsi()
         macd = ta.trend.MACD(df["price"])
         df["MACD"] = macd.macd()
         df["Signal"] = macd.macd_signal()
+        score = 0
+        try:
+            news = requests.get("https://newsapi.org/v2/everything", params={
+                "q": resolved,
+                "sortBy": "publishedAt",
+                "language": "en",
+                "apiKey": st.secrets["NEWS_API_KEY"]
+            }).json()
+            top_titles = [a["title"] for a in news["articles"][:5]]
+            scores = [get_sentiment_score(title) for title in top_titles]
+            score = np.mean(scores) if scores else 0
+        except:
+            pass
+        st.metric("🧠 News Sentiment", round(score, 2))
         st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "MA5"]].tail())
-        score = fetch_news_sentiment(resolved)
-        st.metric("📣 News Sentiment Score", round(score, 2))
+        st.markdown("**Explanation**: RSI indicates momentum, MACD shows trend shift, sentiment derived from news headlines.")
+        plot_main_graph()
 
-    fig, ax = plt.subplots()
-    ax.plot(df["date"], df["price"], label="Price", linewidth=2)
-    ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--")
-    ax.legend()
-    ax.tick_params(axis="x", rotation=45)
-    st.pyplot(fig)
-
-# --- Run Button ---
-if st.button("Run Strategy"):
-    nav, nav_src = get_live_nav(resolved)
-    df = get_stock_price(resolved, nav)
-    if df is None or df.empty:
-        st.error("❌ No data found. Try another stock or fund.")
     else:
-        strategy_code = strategy.split("-")[-1].strip()
-        run_strategy(strategy_code, df, days_ahead, nav, nav_src)
+        st.warning("Strategy not implemented yet.")
