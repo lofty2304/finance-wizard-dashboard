@@ -13,5 +13,6 @@ COPY . .
 EXPOSE 10000
 
 # Run Streamlit on proper port/address
-CMD ["streamlit", "run", "app.py", "--server.port=10000", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "finance_wizard_dashboard.py", "--server.port=10000", "--server.address=0.0.0.0"]
+
 
