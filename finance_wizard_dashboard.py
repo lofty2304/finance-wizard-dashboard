@@ -228,7 +228,120 @@ def analyze_and_predict(df, strategy_code, days_ahead, symbol, live_nav, nav_sou
         df["BB_L"] = bb.bollinger_lband()
         st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "BB_H", "BB_L"]].tail())
 
-    # Add additional strategies here...
+       elif strategy_code == "MC":
+        st.markdown("### ⚖️ ML Model Comparison")
+        st.markdown("""
+        This compares different ML models to estimate future prices.
+        
+        - **Linear Regression**: Straight-line fit. Simple trends.
+        - **Polynomial**: Flexible curve fit. Captures seasonality.
+        - **Random Forest**: Ensemble of decision trees.
+        - **XGBoost**: Gradient boosted. High accuracy.
+        - **Prophet**: Facebook's model for time-series prediction.
+
+        **R² Score** = Prediction accuracy (1 = perfect, 0 = no fit).
+        """)
+
+        lin = LinearRegression().fit(X, y)
+        poly_model = LinearRegression().fit(X_poly, y)
+        rf = RandomForestRegressor().fit(X, y)
+        xgb_model = xgb.XGBRegressor().fit(X, y)
+
+        try:
+            prop_df = df.rename(columns={"date": "ds", "price": "y"})
+            prop = Prophet().fit(prop_df)
+            forecast = prop.predict(prop.make_future_dataframe(periods=days_ahead))
+            r2_prophet = r2_score(y, forecast["yhat"][:len(y)])
+            pred_prophet = forecast.iloc[-1]["yhat"]
+        except:
+            r2_prophet = None
+            pred_prophet = "N/A"
+
+        preds = {
+            "Linear": lin.predict([[X[-1][0] + days_ahead]])[0],
+            "Polynomial": poly_model.predict(poly.transform([[X[-1][0] + days_ahead]]))[0],
+            "Random Forest": rf.predict([[X[-1][0] + days_ahead]])[0],
+            "XGBoost": xgb_model.predict([[X[-1][0] + days_ahead]])[0],
+            "Prophet": pred_prophet
+        }
+
+        st.dataframe(pd.DataFrame(preds.items(), columns=["Model", "Prediction"]))
+
+        if show_r2:
+            r2s = {
+                "Linear": r2_score(y, lin.predict(X)),
+                "Polynomial": r2_score(y, poly_model.predict(X_poly)),
+                "Random Forest": r2_score(y, rf.predict(X)),
+                "XGBoost": r2_score(y, xgb_model.predict(X)),
+                "Prophet": r2_prophet
+            }
+            st.markdown("#### 📊 R² Scores:")
+            for k, v in r2s.items():
+                if v is not None:
+                    st.write(f"{k}: {round(v, 4)}")
+
+        fig, ax = plt.subplots()
+        ax.plot(df["date"], y, label="Actual")
+        ax.plot(df["date"], lin.predict(X), label="Linear")
+        ax.plot(df["date"], poly_model.predict(X_poly), label="Polynomial")
+        ax.plot(df["date"], rf.predict(X), label="Random Forest")
+        ax.plot(df["date"], xgb_model.predict(X), label="XGBoost")
+        if r2_prophet is not None:
+            ax.plot(df["date"], forecast["yhat"][:len(y)], label="Prophet")
+        ax.tick_params(axis="x", rotation=45)
+        ax.legend()
+        st.pyplot(fig)
+
+    elif strategy_code == "MD":
+        st.markdown("### 🧐 Model Explanation")
+        st.markdown("""
+        This explains how each ML model fits the past data.  
+        Good models show low error between predicted and actual values.
+
+        - **Residual Std Dev**: Smaller = better fit
+        - **R² Score**: How well model explains the data (1 = perfect)
+        """)
+
+        preds = {}
+        poly_model = LinearRegression().fit(X_poly, y)
+        preds["Polynomial"] = poly_model.predict(X_poly)
+
+        rf = RandomForestRegressor().fit(X, y)
+        preds["Random Forest"] = rf.predict(X)
+
+        xgb_model = xgb.XGBRegressor().fit(X, y)
+        preds["XGBoost"] = xgb_model.predict(X)
+
+        try:
+            prop_df = df.rename(columns={"date": "ds", "price": "y"})
+            prop = Prophet().fit(prop_df)
+            forecast = prop.predict(prop.make_future_dataframe(periods=0))
+            preds["Prophet"] = forecast["yhat"].values
+        except:
+            preds["Prophet"] = [None] * len(y)
+
+        fig, ax = plt.subplots()
+        ax.plot(df["date"], y, label="Actual", linewidth=2)
+        for name, yhat in preds.items():
+            if None not in yhat:
+                ax.plot(df["date"], yhat, label=name)
+        ax.tick_params(axis="x", rotation=45)
+        ax.legend()
+        st.pyplot(fig)
+
+        st.markdown("#### 📉 Residual Std Dev")
+        for name, yhat in preds.items():
+            if None not in yhat:
+                error = np.std(y - yhat)
+                st.write(f"{name}: ±₹{round(error, 2)}")
+
+        if show_r2:
+            st.markdown("#### 📊 R² Scores")
+            for name, yhat in preds.items():
+                if None not in yhat:
+                    score = r2_score(y, yhat)
+                    st.write(f"{name}: {round(score, 4)}")
+
 
     fig, ax = plt.subplots()
     ax.plot(df["date"], df["price"], label="Price")
