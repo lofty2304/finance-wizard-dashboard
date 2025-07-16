@@ -307,3 +307,14 @@ def run_strategy(code, df, days_ahead, nav, nav_source):
 
     else:
         st.warning("Strategy not implemented yet.")
+        # === EXECUTE ON BUTTON CLICK ===
+if st.button("🚀 Run Strategy"):
+    nav, nav_source = get_live_nav(resolved)
+    df = get_stock_price(resolved, nav)
+    
+    if df is None or df.empty:
+        st.error("❌ No data found. Try another stock or fund.")
+    else:
+        strategy_code = strategy.split("-")[-1].strip()
+        run_strategy(strategy_code, df, days_ahead, nav, nav_source)
+
