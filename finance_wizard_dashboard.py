@@ -18,22 +18,33 @@ finnhub_client = finnhub.Client(api_key=st.secrets["FINNHUB_API_KEY"])
 # Cache functions for performance optimization
 @st.cache_data(ttl=300)  # Cache data for 5 minutes
 def fetch_data(ticker, start_date, end_date, source="yahoo"):
-    """Fetch financial data from Yahoo Finance or Finnhub."""
+    """Fetch financial data from Yahoo Finance or Finnhub with auto-fallback."""
     try:
-        if source == "yahoo":
-            data = yf.download(ticker, start=start_date, end=end_date)
-        elif source == "finnhub":
-            start_ts = int(datetime.strptime(str(start_date), "%Y-%m-%d").timestamp())
-            end_ts = int(datetime.strptime(str(end_date), "%Y-%m-%d").timestamp())
-            data = pd.DataFrame(finnhub_client.stock_candles(ticker, "D", start_ts, end_ts))
-            data['Date'] = pd.to_datetime(data['t'], unit='s')
-            data = data.set_index('Date')[['c']].rename(columns={'c': 'Close'})
+        if source == "finnhub":
+            try:
+                start_ts = int(datetime.strptime(str(start_date), "%Y-%m-%d").timestamp())
+                end_ts = int(datetime.strptime(str(end_date), "%Y-%m-%d").timestamp())
+                data = pd.DataFrame(finnhub_client.stock_candles(ticker, "D", start_ts, end_ts))
+                
+                if data.empty or 'c' not in data or data.get("s") == "no_data":
+                    raise ValueError("No valid data from Finnhub.")
+
+                data['Date'] = pd.to_datetime(data['t'], unit='s')
+                data = data.set_index('Date')[['c']].rename(columns={'c': 'Close'})
+                return data
+            except Exception as e:
+                st.warning(f"Finnhub error or access denied: {e}. Falling back to Yahoo Finance...")
+
+        # Yahoo fallback or direct
+        data = yf.download(ticker, start=start_date, end=end_date)
         if data.empty:
-            raise ValueError("No data found for the given ticker.")
+            raise ValueError("Yahoo Finance returned no data.")
         return data
+
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.error(f"Final data fetch failed: {e}")
         return None
+
 
 @st.cache_resource
 def load_nn_model():
