@@ -239,7 +239,7 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
         else:
             plot_main_graph()
 
-    elif code == "MC":
+       elif code == "MC":
         st.subheader("⚖️ Model Comparison")
         models = {
             "Linear": LinearRegression().fit(X, y),
@@ -259,22 +259,30 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
             prophet_r2 = None
             prophet_forecast = "N/A"
 
-        preds = {k: model.predict(poly.transform([[X[-1][0] + days_ahead]]) if "Poly" in k else [[X[-1][0] + days_ahead]])[0] for k, model in models.items()}
+        preds = {
+            k: model.predict(poly.transform([[X[-1][0] + days_ahead]]) if "Poly" in k else [[X[-1][0] + days_ahead]])[0]
+            for k, model in models.items()
+        }
         preds["Prophet"] = prophet_forecast
 
         st.dataframe(pd.DataFrame(preds.items(), columns=["Model", "Prediction (₹)"]))
 
         if show_r2:
             st.markdown("### 📈 R² Score")
-            r2_vals = {k: r2_score(y, model.predict(X_poly if "Poly" in k else X)) for k, model in models.items()}
+            r2_vals = {
+                k: r2_score(y, model.predict(X_poly if "Poly" in k else X))
+                for k, model in models.items()
+            }
             r2_vals["Prophet"] = prophet_r2
             st.write(pd.DataFrame(r2_vals.items(), columns=["Model", "R²"]))
 
-           st.markdown("**Explanation**: Higher R² = better fit. This table compares accuracy and predicted value across models.")
-    if plot_future:
-        plot_main_graph()
-    else:
-        plot_main_graph()
+        st.markdown("**Explanation**: Higher R² = better fit. This table compares accuracy and predicted value across models.")
+
+        if plot_future:
+            plot_main_graph()
+        else:
+            plot_main_graph()
+)
 
 
     elif code == "D":
