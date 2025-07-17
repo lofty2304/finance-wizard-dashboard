@@ -100,11 +100,15 @@ else:
         df.columns = ['ds', 'y']  # For Prophet compatibility
 
         # Add technical indicators if selected
-        if show_indicators:
-            if "SMA (20)" in show_indicators:
-                data['SMA_20'] = ta.trend.sma_indicator(data['Close'], window=20)
-            if "RSI (14)" in show_indicators:
-                data['RSI_14'] = ta.momentum.rsi(data['Close'], window=14)
+        # Add technical indicators if selected
+if show_indicators:
+    if "SMA (20)" in show_indicators:
+        data['SMA_20'] = ta.trend.sma_indicator(data['Close'], window=20)
+    if "RSI (14)" in show_indicators:
+        close_series = data['Close']
+        if isinstance(close_series, pd.DataFrame):
+            close_series = close_series.squeeze()
+        data['RSI_14'] = ta.momentum.rsi(close_series, window=14)
 
         # Forecasting based on model choice
         with st.spinner(f"Running {model_choice} model..."):
