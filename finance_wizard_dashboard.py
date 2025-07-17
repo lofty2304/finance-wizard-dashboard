@@ -38,10 +38,12 @@ st.markdown("""
 st.caption("🧡 Empowering clients with 22 years of trust and transparency.")
 
 # === SIDEBAR CONFIG ===
+# === SIDEBAR CONFIG ===
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
     days_ahead = st.slider("📅 Days Ahead to Forecast", 1, 30, 7)
     show_r2 = st.checkbox("📊 Show R² Scores", value=True)
+    plot_future = st.checkbox("📈 Show Forecast Overlay on Chart", value=True)  # <-- NEW LINE
     st.markdown("Each strategy will use this value to forecast into the future.")
 
 # === STRATEGY SELECTOR ===
@@ -160,7 +162,7 @@ def predict_price(df, days_ahead):
     std = np.std(y - model.predict(X))
     return pred, pred - 1.96 * std, pred + 1.96 * std
 # --- Strategy Execution Logic ---
-def run_strategy(code, df, days_ahead, nav, nav_source):
+def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
     df["day_index"] = (df["date"] - df["date"].min()).dt.days
     df["MA5"] = df["price"].rolling(5).mean()
     df["Live_NAV"] = nav
@@ -268,8 +270,12 @@ def run_strategy(code, df, days_ahead, nav, nav_source):
             r2_vals["Prophet"] = prophet_r2
             st.write(pd.DataFrame(r2_vals.items(), columns=["Model", "R²"]))
 
-        st.markdown("**Explanation**: Higher R² = better fit. This table compares accuracy and predicted value across models.")
+           st.markdown("**Explanation**: Higher R² = better fit. This table compares accuracy and predicted value across models.")
+    if plot_future:
         plot_main_graph()
+    else:
+        plot_main_graph()
+
 
     elif code == "D":
         st.subheader("📉 Downside Risk")
@@ -277,9 +283,14 @@ def run_strategy(code, df, days_ahead, nav, nav_source):
         vol = np.std(returns)
         pred, _, _ = predict_price_linear(df, days_ahead)
         downside = pred - 1.96 * vol * df["price"].iloc[-1]
-        st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
-        st.markdown("**Explanation**: Downside = projected dip based on current volatility. NAV mismatch may occur if prices are illiquid or lagging.")
+            st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
+    st.markdown("**Explanation**: Downside = projected dip based on current volatility. NAV mismatch may occur if prices are illiquid or lagging.")
+    if plot_future:
+        downside_line = [downside] * days_ahead
+        plot_main_graph(forecast_overlay=downside_line)
+    else:
         plot_main_graph()
+
 
     elif code == "S":
         st.subheader("🕵️ Deep Stock Dive")
@@ -300,10 +311,27 @@ def run_strategy(code, df, days_ahead, nav, nav_source):
             score = np.mean(scores) if scores else 0
         except:
             pass
-        st.metric("🧠 News Sentiment", round(score, 2))
-        st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "MA5"]].tail())
-        st.markdown("**Explanation**: RSI indicates momentum, MACD shows trend shift, sentiment derived from news headlines.")
+            st.metric("🧠 News Sentiment", round(score, 2))
+    st.dataframe(df[["date", "price", "RSI", "MACD", "Signal", "MA5"]].tail())
+    st.markdown("**Explanation**: RSI indicates momentum, MACD shows trend shift, sentiment derived from news headlines.")
+    if plot_future:
+        plot_main_graph()
+    else:
         plot_main_graph()
 
+   # === RUN STRATEGY ON BUTTON CLICK (FINAL STEP) ===
+if resolved and st.button("🚀 Run Forecast"):
+    df_price = get_stock_price(resolved, get_live_nav(resolved)[0])
+    if df_price is not None:
+        nav, nav_source = get_live_nav(resolved)
+        run_strategy(
+            strategy.split()[0],
+            df_price,
+            days_ahead,
+            nav,
+            nav_source,
+            plot_future
+        )
     else:
-        st.warning("Strategy not implemented yet.")
+        st.error("❌ Could not fetch historical prices. Check ticker or connection.")
+
