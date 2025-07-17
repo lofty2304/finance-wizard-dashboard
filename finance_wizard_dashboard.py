@@ -159,6 +159,20 @@ def prophet_forecast(df, days_ahead):
     future = model.make_future_dataframe(periods=days_ahead)
     forecast = model.predict(future)
     return forecast["yhat"][-days_ahead:].tolist(), model
+# --- Plotting Utility ---
+def plot_main_graph(df, forecast=None, title="Forecast"):
+    fig, ax = plt.subplots()
+    ax.plot(df["date"], df["price"], label="Historical Price", color="black")
+    if "MA5" in df.columns:
+        ax.plot(df["date"], df["MA5"], label="MA5", linestyle="--", color="orange")
+    if forecast is not None:
+        last_date = df["date"].iloc[-1]
+        future_dates = [last_date + timedelta(days=i+1) for i in range(len(forecast))]
+        ax.plot(future_dates, forecast, label=title, linestyle="--", color="blue")
+    ax.set_title(title)
+    ax.legend()
+    ax.tick_params(axis="x", rotation=45)
+    st.pyplot(fig)
 
 
 # --- Scenario Logic ---
