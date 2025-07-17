@@ -239,7 +239,7 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
         else:
             plot_main_graph()
 
-       elif code == "MC":
+        elif code == "MC": 
         st.subheader("⚖️ Model Comparison")
         models = {
             "Linear": LinearRegression().fit(X, y),
@@ -283,20 +283,18 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
         else:
             plot_main_graph()
 
-    elif code == "D":
+        elif code == "D":
         st.subheader("📉 Downside Risk")
         returns = df["price"].pct_change().dropna()
         vol = np.std(returns)
-            pred, _, _ = predict_price(df, days_ahead)
+        pred, _, _ = predict_price(df, days_ahead)
         downside = pred - 1.96 * vol * df["price"].iloc[-1]
-            st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
-    st.markdown("**Explanation**: Downside = projected dip based on current volatility. NAV mismatch may occur if prices are illiquid or lagging.")
-    if plot_future:
-        downside_line = [downside] * days_ahead
-        plot_main_graph(forecast_overlay=downside_line)
-    else:
-        plot_main_graph()
 
+        st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
+        st.markdown("**Explanation**: Based on historical volatility and normal distribution of returns.")
+
+        downside_line = [downside] * days_ahead if plot_future else None
+        plot_main_graph(forecast_overlay=downside_line)
 
     elif code == "S":
         st.subheader("🕵️ Deep Stock Dive")
