@@ -82,6 +82,36 @@ def resolve_ticker(name):
 
 resolved = resolve_ticker(user_input)
 st.caption(f"🧾 Resolved Ticker: **{resolved}**")
+# --- Data Fetching Functions ---
+@st.cache_data(ttl=300)
+def get_live_nav(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        nav = info.get("navPrice") or info.get("regularMarketPrice")
+        if nav: return round(nav, 2), "Yahoo Finance"
+    except: pass
+    try:
+        txt = requests.get("https://www.amfiindia.com/spages/NAVAll.txt").text
+        for line in txt.splitlines():
+            if ticker.upper() in line:
+                val = float(line.split(";")[-1])
+                return round(val, 2), "AMFI India"
+    except: pass
+    return None, "Unavailable"
+
+def get_stock_price(symbol, fallback_nav):
+    try:
+        df = yf.Ticker(symbol).history(period="180d")
+        if not df.empty:
+            df = df.reset_index()[["Date", "Close"]]
+            df.columns = ["date", "price"]
+            return df
+    except: pass
+    if fallback_nav:
+        dates = pd.date_range(end=datetime.today(), periods=90)
+        return pd.DataFrame({"date": dates, "price": [fallback_nav] * 90})
+    return None
+
 # --- Sentiment Analysis ---
 @st.cache_data(ttl=600)
 def get_sentiment_score(query):
