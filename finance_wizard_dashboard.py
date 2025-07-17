@@ -81,6 +81,25 @@ def resolve_ticker(name):
 
 resolved = resolve_ticker(user_input)
 st.caption(f"🧾 Resolved Ticker: **{resolved}**")
+# --- Fetch Live NAV (Fixed Placement) ---
+@st.cache_data(ttl=300)
+def get_live_nav(ticker):
+    try:
+        info = yf.Ticker(ticker).info
+        nav = info.get("navPrice") or info.get("regularMarketPrice")
+        if nav:
+            return round(nav, 2), "Yahoo Finance"
+    except:
+        pass
+    try:
+        txt = requests.get("https://www.amfiindia.com/spages/NAVAll.txt").text
+        for line in txt.splitlines():
+            if ticker.upper() in line:
+                val = float(line.split(";")[-1])
+                return round(val, 2), "AMFI India"
+    except:
+        pass
+    return None, "Unavailable"
 
 # --- Data Functions ---
 @st.cache_data(ttl=300)
