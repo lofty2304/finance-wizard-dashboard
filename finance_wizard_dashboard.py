@@ -282,8 +282,6 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
             plot_main_graph()
         else:
             plot_main_graph()
-)
-
 
     elif code == "D":
         st.subheader("📉 Downside Risk")
