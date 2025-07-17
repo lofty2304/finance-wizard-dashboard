@@ -195,7 +195,7 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
 
     if code == "W":
         st.subheader("🔮 Forecast: One Stock")
-        pred, low, high = predict_price_linear(df, days_ahead)
+        pred, low, high = predict_price(df, days_ahead)
         st.metric("📊 Predicted Price", f"₹{round(pred, 2)}")
         st.info(f"95% Confidence Interval: ₹{round(low, 2)} – ₹{round(high, 2)}")
         st.markdown("**Explanation**: This uses a simple linear model to forecast the next closing price. The 95% confidence interval shows potential price spread.")
@@ -289,7 +289,7 @@ def run_strategy(code, df, days_ahead, nav, nav_source, plot_future=True):
         st.subheader("📉 Downside Risk")
         returns = df["price"].pct_change().dropna()
         vol = np.std(returns)
-        pred, _, _ = predict_price_linear(df, days_ahead)
+            pred, _, _ = predict_price(df, days_ahead)
         downside = pred - 1.96 * vol * df["price"].iloc[-1]
             st.warning(f"📉 Downside: ₹{round(downside, 2)} | Volatility: {round(vol * 100, 2)}%")
     st.markdown("**Explanation**: Downside = projected dip based on current volatility. NAV mismatch may occur if prices are illiquid or lagging.")
