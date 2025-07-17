@@ -152,12 +152,14 @@ def xgboost_forecast(df, days_ahead):
     return pred.tolist(), model.score(df[["day_index"]], df["price"])
 
 def prophet_forecast(df, days_ahead):
-    prophet_df = df[["date", "price"]].rename(columns={"date": "ds", "price": "y"})
+    prophet_df = df.rename(columns={"date": "ds", "price": "y"})
+    prophet_df["ds"] = prophet_df["ds"].dt.tz_localize(None)  # ✅ Fix timezone issue
     model = Prophet()
     model.fit(prophet_df)
     future = model.make_future_dataframe(periods=days_ahead)
     forecast = model.predict(future)
-    return forecast.tail(days_ahead)["yhat"].tolist(), model
+    return forecast["yhat"][-days_ahead:].tolist(), model
+
 
 # --- Scenario Logic ---
 def adjust_forecast(base_forecast, sentiment_score, scenario_code):
